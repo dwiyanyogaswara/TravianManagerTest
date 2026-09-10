@@ -25,7 +25,6 @@ import android.graphics.Color
 import android.text.SpannableString
 import android.text.Spanned
 import android.view.View
-import android.view.ViewGroup
 import org.json.JSONObject
 import org.json.JSONArray
 import java.text.SimpleDateFormat
@@ -34,28 +33,6 @@ import java.util.Locale
 import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
-    companion object {
-        private var instanceRef: java.lang.ref.WeakReference<MainActivity>? = null
-
-        fun requestVillageRefreshFromService(): Boolean {
-            val activity = instanceRef?.get() ?: return false
-            activity.runOnUiThread {
-                if (!activity.isFinishing) {
-                    activity.logEvent("AUTO: REFRESH VILLAGE dijalankan 1 menit setelah Next Run")
-                    activity.villageScanActive = false
-                    activity.villageScanTargets.clear()
-                    activity.villageScanResults.clear()
-                    activity.villageScanIndex = 0
-                    activity.villageScanExpected = 0
-                    activity.villageScanRetry = 0
-                    activity.villageScanPageRetry = 0
-                    activity.villageScanDataRetry = 0
-                    activity.refreshVillagesForUi()
-                }
-            }
-            return true
-        }
-    }
     private lateinit var webView: WebView
     private lateinit var farmStatus: TextView
     private lateinit var status: TextView
@@ -114,7 +91,6 @@ class MainActivity : Activity() {
     private lateinit var logOverview: TextView
     private lateinit var recentLogs: TextView
     private lateinit var botToggle: Switch
-    private var selectionControlsLocked = false
 
     // Scanner village UI: setelah daftar link ditemukan, WebView benar-benar
     // berpindah ke village satu per satu agar nama + resource dibaca dari halaman
@@ -130,8 +106,6 @@ class MainActivity : Activity() {
     private var villageScanDataRetry = 0
     private var villageScanScrollPass = 0
     private val villageScanCollectedTargets = linkedMapOf<String, String>()
-    // Link village disimpan saat discovery agar Builder dapat mengikuti link village yang sama.
-    private val villageScanCollectedLinks = linkedMapOf<String, String>()
     private var villageScanCollectInFlight = false
 
     private val handler = Handler(Looper.getMainLooper())
@@ -174,7 +148,6 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         debugTrace("ENTER onCreate")
         super.onCreate(savedInstanceState)
-        instanceRef = java.lang.ref.WeakReference(this)
         setContentView(R.layout.activity_main)
 
         farmTab = findViewById(R.id.farmTab)
@@ -319,7 +292,6 @@ class MainActivity : Activity() {
         botToggle.isChecked = serviceRunning
         updateBotToggleVisual(serviceRunning)
         botToggle.setOnCheckedChangeListener(this@MainActivity::handleBotToggle)
-        setSelectionControlsLocked(serviceRunning)
 
         createNotificationChannel()
     }
@@ -336,28 +308,12 @@ class MainActivity : Activity() {
      * ke SharedPreferences. Ini memungkinkan auto re-login ketika session
      * Travian expired, selama proses aplikasi masih berjalan.
      */
-    private fun setSelectionControlsLocked(locked: Boolean) {
-        debugTrace("ENTER setSelectionControlsLocked")
-        selectionControlsLocked = locked
-        val farmListCheck = findViewById<CheckBox>(R.id.farmListEnabled)
-        val resourceBuilderCheck = findViewById<CheckBox>(R.id.resourceBuilder)
-        farmListCheck.isEnabled = !locked
-        resourceBuilderCheck.isEnabled = !locked
-        findViewById<Button>(R.id.refreshVillages).isEnabled = !locked
-        if (::villageChecklist.isInitialized) {
-            for (i in 0 until villageChecklist.childCount) {
-                (villageChecklist.getChildAt(i) as? CheckBox)?.isEnabled = !locked
-            }
-        }
-    }
-
     private fun handleBotToggle(button: CompoundButton, checked: Boolean) {
         debugTrace("ENTER handleBotToggle")
         if (checked) {
             if (!startSchedulerFromToggle()) {
                 botToggle.setOnCheckedChangeListener(null)
                 botToggle.isChecked = false
-                setSelectionControlsLocked(false)
                 updateBotToggleVisual(false)
                 botToggle.setOnCheckedChangeListener(this@MainActivity::handleBotToggle)
             }
@@ -419,7 +375,6 @@ class MainActivity : Activity() {
         pendingUsername = user
         pendingPassword = pass
         running = true
-        setSelectionControlsLocked(true)
         updateBotToggleVisual(true)
         farmStatus.text = "Background automation sedang dimulai..."
         logEvent("Memulai background automation. Range=${minMinutes}-${maxMinutes} menit; Farm List=${if (farmListEnabled) "ON" else "OFF"}; Resource Builder=${if (resourceBuilderEnabled) "ON" else "OFF"}")
@@ -585,9 +540,7 @@ class MainActivity : Activity() {
         val array = org.json.JSONArray()
         loadedVillages.forEach { (id, name) ->
             if (selected.contains(id)) {
-                array.put(JSONObject().apply { put("id", id); put("name", name)
-                    put("href", villageScanCollectedLinks[id].orEmpty())
-                })
+                array.put(JSONObject().apply { put("id", id); put("name", name) })
             }
         }
         return array.toString()
@@ -647,14 +600,12 @@ class MainActivity : Activity() {
                 }
             }
         }
-        selectAll.isEnabled = !selectionControlsLocked
         villageChecklist.addView(selectAll)
 
         loadedVillages.forEach { (id, name) ->
             villageChecklist.addView(CheckBox(this).apply {
                 text = name
                 tag = id
-                isEnabled = !selectionControlsLocked
                 isChecked = if (configured) saved.contains(id) else true
                 setOnCheckedChangeListener { _, _ ->
                     // Simpan segera agar pilihan tidak hilang ketika Activity ditutup.
@@ -844,7 +795,6 @@ class MainActivity : Activity() {
         villageScanDataRetry = 0
         villageScanScrollPass = 0
         villageScanCollectedTargets.clear()
-        villageScanCollectedLinks.clear()
         villageScanCollectInFlight = false
         clearSavedResourceBuilderTargets()
 
@@ -978,11 +928,7 @@ class MainActivity : Activity() {
                 val item = array.optJSONObject(i) ?: continue
                 val id = item.optString("id").trim()
                 val name = item.optString("name").trim().ifBlank { "Village $id" }
-                val href = item.optString("href").trim()
-                if (id.isNotBlank()) {
-                    targets.add(id to name)
-                    if (href.isNotBlank()) villageScanCollectedLinks[id] = href
-                }
+                if (id.isNotBlank()) targets.add(id to name)
             }
         }
 
@@ -1871,7 +1817,6 @@ class MainActivity : Activity() {
     private fun stopScheduler() {
         debugTrace("ENTER stopScheduler")
         running = false
-        setSelectionControlsLocked(false)
         pendingStartAll = false
         val intent = android.content.Intent(this, FarmAutomationService::class.java).apply {
             action = FarmAutomationService.ACTION_STOP
@@ -2214,7 +2159,6 @@ class MainActivity : Activity() {
             botToggle.isChecked = serviceRunning
             updateBotToggleVisual(serviceRunning)
             botToggle.setOnCheckedChangeListener(this@MainActivity::handleBotToggle)
-            setSelectionControlsLocked(serviceRunning)
         }
         if (serviceRunning) {
             status.text = "Status: RUNNING — BACKGROUND"
@@ -2356,69 +2300,10 @@ class MainActivity : Activity() {
                 }
             }
         }
-        addLogControlsIfNeeded()
         farmTabButton.setOnClickListener { showTab(farmTab) }
         capacityTabButton.setOnClickListener { showTab(capacityTab) }
         logTabButton.setOnClickListener { showTab(logTab) }
         showTab(farmTab)
-    }
-
-    private fun addLogControlsIfNeeded() {
-        debugTrace("ENTER addLogControlsIfNeeded")
-        val parent = logOverview.parent as? ViewGroup ?: return
-        if (parent.findViewWithTag<View>("log_controls") != null) return
-
-        val index = parent.indexOfChild(logOverview).coerceAtLeast(0)
-        val originalParams = logOverview.layoutParams
-        parent.removeView(logOverview)
-
-        val wrapper = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = originalParams
-            tag = "log_controls_wrapper"
-        }
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(-1, -2)
-            setPadding(0, 0, 0, 8)
-            tag = "log_controls"
-        }
-        val refresh = Button(this).apply {
-            text = "REFRESH"
-            layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = 8 }
-            setOnClickListener {
-                refreshLogOverview()
-                refreshRecentLogs()
-            }
-        }
-        val clear = Button(this).apply {
-            text = "HAPUS"
-            layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
-            setOnClickListener {
-                android.app.AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Hapus log?")
-                    .setMessage("Semua log aktivitas akan dihapus.")
-                    .setNegativeButton("BATAL", null)
-                    .setPositiveButton("HAPUS") { _, _ -> clearActivityLog() }
-                    .show()
-            }
-        }
-        row.addView(refresh)
-        row.addView(clear)
-        wrapper.addView(row)
-        wrapper.addView(logOverview, LinearLayout.LayoutParams(-1, -2))
-        parent.addView(wrapper, index)
-    }
-
-    private fun clearActivityLog() {
-        logIoExecutor.execute {
-            runCatching { getFileStreamPath(logFileName).delete() }
-            handler.post {
-                if (isFinishing) return@post
-                logOverview.text = "Belum ada log."
-                recentLogs.text = "Belum ada log."
-            }
-        }
     }
 
     private fun parseResourcePair(raw: String): Pair<Int, Int> {
@@ -2609,7 +2494,6 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        if (instanceRef?.get() === this) instanceRef = null
         debugTrace("ENTER onDestroy")
         villageScanActive = false
         villageScanTargets.clear()
