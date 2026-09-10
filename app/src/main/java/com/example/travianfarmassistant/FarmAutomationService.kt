@@ -112,7 +112,7 @@ class FarmAutomationService : Service() {
     private var minMinutes = 1L
     private var maxMinutes = 1L
     private var nextAt = 0L
-    private val delayedVillageRefreshRunnable: Runnable = Runnable {
+    private val delayedVillageRefreshRunnable = Runnable {
         if (!running) return@Runnable
         if (pendingStartAll || builderInProgress || loginInProgress || reloginRequested) {
             // Jangan mengganggu Farm List / Resource Builder yang sedang memakai WebView.
@@ -129,7 +129,7 @@ class FarmAutomationService : Service() {
             handler.postDelayed(delayedVillageRefreshRunnable, 10_000L)
         }
     }
-    private val cycleWatchdogRunnable: Runnable = Runnable {
+    private val cycleWatchdogRunnable = Runnable {
         if (!running) return@Runnable
         val now = System.currentTimeMillis()
         persistActiveCycleDuration(now)
@@ -467,9 +467,7 @@ class FarmAutomationService : Service() {
             }
 
             if (builderInProgress && lower.contains("dorf1.php")) {
-                val expectedVillage = builderVillages.getOrNull(builderVillageIndex)
-                val expectedId = expectedVillage?.first.orEmpty()
-                val expectedName = expectedVillage?.second.orEmpty()
+                val expectedId = builderVillages.getOrNull(builderVillageIndex)?.first.orEmpty()
                 val currentId = Regex("[?&]newdid=(\\d+)", RegexOption.IGNORE_CASE)
                     .find(lower)?.groupValues?.getOrNull(1).orEmpty()
 
@@ -478,46 +476,14 @@ class FarmAutomationService : Service() {
                     handler.postDelayed({ discoverVillagesForBuilder() }, 700)
                 } else if (expectedId.isNotBlank() && currentId == expectedId &&
                     pendingBuilderResourceHref.isNotBlank()) {
-                    // ID cocok belum cukup: pastikan NAMA village aktif juga cocok.
-                    // Ini mencegah kasus C2 tersimpan tetapi WebView masih aktif di C4.
-                    val verifyJs = """
-                        (() => {
-                            const clean = s => String(s || '').replace(/\s+/g,' ').trim();
-                            const norm = s => clean(s)
-                                .replace(/\(\s*[−-]?\d+\s*\|\s*[−-]?\d+\s*\)/g, '')
-                                .trim().toLowerCase();
-                            const wanted = norm(${JSONObject.quote(expectedName)});
-                            const active = document.querySelector(
-                                '#sidebarBoxVillagelist .listEntry.active, #sidebarBoxVillagelist .listEntry.selected, ' +
-                                '#sidebarBoxVillagelist .dropContainer.active, #sidebarBoxVillagelist .dropContainer.selected, ' +
-                                '.villageList .listEntry.active, .villageList .listEntry.selected'
-                            );
-                            const activeName = norm(
-                                active?.querySelector('.name')?.textContent ||
-                                active?.textContent || ''
-                            );
-                            return JSON.stringify({ok: !wanted || !activeName || activeName === wanted, activeName});
-                        })();
-                    """.trimIndent()
-                    automationWebView()?.evaluateJavascript(verifyJs) { raw ->
-                        val decoded = raw.orEmpty().removePrefix("\"").removeSuffix("\"")
-                            .replace("\\\"", "\"").replace("\\\\", "\\")
-                        val verified = runCatching { JSONObject(decoded) }.getOrNull()
-                        val ok = verified?.optBoolean("ok", false) == true
-                        val activeName = verified?.optString("activeName").orEmpty()
-                        if (ok) {
-                            if (builderStage != "OPEN_RESOURCE" && builderStage != "WAIT_UPGRADE" &&
-                                builderStage != "ADVANCING") {
-                                builderStage = "OPEN_RESOURCE"
-                                handler.postDelayed({ openSavedBuilderResource() }, 500)
-                            }
-                        } else {
-                            logEvent("Resource Builder: ID benar tetapi village aktif masih '$activeName', target=$expectedName — ulangi pindah village")
-                            builderStage = "CLICK_VILLAGE"
-                            handler.postDelayed({ clickBuilderVillageFromDorf() }, 500)
-                        }
+                    // Village yang benar sudah aktif. SEKARANG baru buka href
+                    // resource yang telah disimpan oleh scanner.
+                    if (builderStage != "OPEN_RESOURCE" && builderStage != "WAIT_UPGRADE" &&
+                        builderStage != "ADVANCING") {
+                        builderStage = "OPEN_RESOURCE"
+                        handler.postDelayed({ openSavedBuilderResource() }, 500)
                     }
-                } else if (builderStage == "LOAD_DORF" || builderStage == "CLICK_VILLAGE" || builderStage == "WAIT_VILLAGE") {
+                } else if (builderStage == "LOAD_DORF" || builderStage == "CLICK_VILLAGE") {
                     // Masih berada di daftar village: klik village yang dipilih.
                     builderStage = "CLICK_VILLAGE"
                     handler.postDelayed({ clickBuilderVillageFromDorf() }, 400)
@@ -536,7 +502,7 @@ class FarmAutomationService : Service() {
                 return@acceptCookiesIfPresent
             }
 
-            if (builderInProgress && (lower.contains("/hero") || lower.contains("hero/inventory"))) {
+            if (builderInProgress && lower.contains("hero/inventory")) {
                 handler.postDelayed({ useHeroInventoryForPendingUpgrade() }, 700)
                 return@acceptCookiesIfPresent
             }
@@ -1013,10 +979,7 @@ class FarmAutomationService : Service() {
         // mematikan Builder yang memang membutuhkan waktu lebih dari 1 menit.
         handler.removeCallbacks(cycleWatchdogRunnable)
         handler.postDelayed(cycleWatchdogRunnable, 5 * 60_000L)
-        // Mulai village pertama. Fungsi ini mengisi pendingBuilderResourceHref
-        // dari target yang sudah disimpan, lalu membuka dorf1.php agar village
-        // yang dipilih benar-benar diklik sebelum href resource dibuka.
-        processResourceBuilderVillage()
+        automationWebView()?.loadUrl("$server/dorf1.php")
     }
 
     private fun processResourceBuilderVillage() {
@@ -1128,147 +1091,76 @@ class FarmAutomationService : Service() {
     private fun clickBuilderVillageFromDorf() {
         debugTrace("ENTER clickBuilderVillageFromDorf")
         if (!running || !builderInProgress || !builderVillageClickInProgress) return
-
         val village = builderVillages.getOrNull(builderVillageIndex) ?: return
-        val villageId = village.first
-        val villageName = village.second
-        val idJson = JSONObject.quote(villageId)
-        val nameJson = JSONObject.quote(villageName)
-
-        // Jangan hanya percaya ID yang tersimpan. Jika mapping lama/scan pernah salah,
-        // cari ulang entry berdasarkan NAMA village yang benar-benar dipilih (mis. C2),
-        // ambil data-did milik entry tersebut, lalu pindah ke ID itu.
+        val savedVillageHref = builderVillageLinks[village.first].orEmpty().trim()
+        val idJson = JSONObject.quote(village.first)
+        val nameJson = JSONObject.quote(village.second)
+        val hrefJson = JSONObject.quote(savedVillageHref)
         val js = """
             (() => {
-                const wantedId = $idJson;
-                const wantedName = $nameJson;
+                const id = $idJson;
+                const name = $nameJson;
+                const savedHref = $hrefJson;
                 const clean = s => String(s || '').replace(/\s+/g,' ').trim();
-                const normalizeName = s => clean(s)
-                    .replace(/\(\s*[−-]?\d+\s*\|\s*[−-]?\d+\s*\)/g, '')
-                    .trim().toLowerCase();
-                const wantedNameNorm = normalizeName(wantedName);
-                const entries = [...document.querySelectorAll(
-                    '#sidebarBoxVillagelist .listEntry, #sidebarBoxVillagelist .dropContainer, .villageList .listEntry, .villageList .dropContainer'
-                )];
+                const sameHref = (a, b) => {
+                    if (!a || !b || b === '#') return false;
+                    const absA = new URL(a, location.href).href.split('#')[0];
+                    const absB = new URL(b, location.href).href.split('#')[0];
+                    return absA === absB;
+                };
+                const anchors = [...document.querySelectorAll('a[href], [data-did]')];
+                let anchor = null;
 
-                let found = null;
-                let foundId = '';
-                let foundHref = '';
-                let match = '';
-
-                // 1. Prioritas: entry dengan ID tersimpan + nama yang sama.
-                for (const entry of entries) {
-                    const anchor = entry.matches('a') ? entry : entry.querySelector('a');
-                    const dataDid = entry.getAttribute('data-did') || anchor?.getAttribute('data-did') || '';
-                    const href = anchor?.getAttribute('href') || '';
-                    const hrefDid = href.match(/[?&]newdid=(\d+)/i)?.[1] || '';
-                    const id = /^\d+$/.test(dataDid) ? dataDid : hrefDid;
-                    const name = normalizeName(
-                        entry.querySelector('.name')?.textContent ||
-                        anchor?.getAttribute('title') ||
-                        anchor?.getAttribute('aria-label') || ''
-                    );
-                    if (id === wantedId && name === wantedNameNorm) {
-                        found = entry; foundId = id; foundHref = href; match = 'id+name'; break;
-                    }
+                // Prioritas 1: link village yang memang sudah disimpan saat scan.
+                if (savedHref && savedHref !== '#') {
+                    anchor = anchors.find(a => {
+                        const h = a.getAttribute('href') || '';
+                        return sameHref(h, savedHref);
+                    }) || null;
                 }
 
-                // 2. Jika ID tersimpan salah, nama menjadi sumber kebenaran.
-                if (!found && wantedNameNorm) {
-                    for (const entry of entries) {
-                        const anchor = entry.matches('a') ? entry : entry.querySelector('a');
-                        const dataDid = entry.getAttribute('data-did') || anchor?.getAttribute('data-did') || '';
-                        const href = anchor?.getAttribute('href') || '';
+                // Prioritas 2: data-did / newdid dari village yang sama.
+                if (!anchor) {
+                    anchor = anchors.find(a => {
+                        const entry = a.closest('.listEntry, .dropContainer, li');
+                        const dataDid = a.getAttribute('data-did') || entry?.getAttribute('data-did') || '';
+                        const href = a.getAttribute('href') || '';
                         const hrefDid = href.match(/[?&]newdid=(\d+)/i)?.[1] || '';
-                        const id = /^\d+$/.test(dataDid) ? dataDid : hrefDid;
-                        const name = normalizeName(
-                            entry.querySelector('.name')?.textContent ||
-                            anchor?.getAttribute('title') ||
-                            anchor?.getAttribute('aria-label') || ''
-                        );
-                        if (/^\d+$/.test(id) && name === wantedNameNorm) {
-                            found = entry; foundId = id; foundHref = href; match = 'name'; break;
-                        }
-                    }
+                        return dataDid === id || hrefDid === id;
+                    }) || null;
                 }
 
-                // 3. Fallback ID jika nama belum tersedia di DOM.
-                if (!found) {
-                    for (const entry of entries) {
-                        const anchor = entry.matches('a') ? entry : entry.querySelector('a');
-                        const dataDid = entry.getAttribute('data-did') || anchor?.getAttribute('data-did') || '';
-                        const href = anchor?.getAttribute('href') || '';
-                        const hrefDid = href.match(/[?&]newdid=(\d+)/i)?.[1] || '';
-                        const id = /^\d+$/.test(dataDid) ? dataDid : hrefDid;
-                        if (id === wantedId) {
-                            found = entry; foundId = id; foundHref = href; match = 'id'; break;
-                        }
-                    }
+                if (anchor) {
+                    anchor.scrollIntoView({block:'center', inline:'nearest'});
+                    anchor.click();
+                    return 'clicked';
                 }
 
-                if (foundId) {
-                    AndroidFarm.onLiveClickResult(JSON.stringify({
-                        kind:'AUTO_VILLAGE_RESOLVED', wantedId, wantedName,
-                        actualId:foundId, href:foundHref, match, pageUrl:location.href
-                    }));
-                    // Klik entry village yang benar terlebih dahulu. Ini adalah sumber
-                    // perpindahan village utama; direct load URL hanya menjadi fallback.
-                    const clickable = found.matches('a') ? found : found.querySelector('a');
-                    if (clickable) {
-                        clickable.scrollIntoView({block:'center'});
-                        clickable.click();
-                        return JSON.stringify({ok:true, actualId:foundId, href:foundHref, match, clicked:true});
-                    }
-                    return JSON.stringify({ok:true, actualId:foundId, href:foundHref, match, clicked:false});
+                // Last resort: jika Travian tidak merender anchor village tetapi
+                // snapshot memiliki href village yang valid, buka link tersimpan.
+                if (savedHref && savedHref !== '#' && /newdid=\d+/i.test(savedHref)) {
+                    location.href = new URL(savedHref, location.href).href;
+                    return 'loaded_saved_village';
                 }
-
-                AndroidFarm.onLiveClickResult(JSON.stringify({
-                    kind:'AUTO_VILLAGE_RESOLVE_FAILED', wantedId, wantedName,
-                    pageUrl:location.href
-                }));
-                return JSON.stringify({ok:false, actualId:'', href:'', match:''});
+                return 'not-found';
             })();
         """.trimIndent()
-
-        builderStage = "WAIT_VILLAGE"
-        builderVillageClickInProgress = true
         automationWebView()?.evaluateJavascript(js) { raw ->
-            val decoded = raw.orEmpty().removePrefix("\"").removeSuffix("\"")
-                .replace("\\\"", "\"").replace("\\\\", "\\")
-            val result = runCatching { JSONObject(decoded) }.getOrNull()
-            val actualId = result?.optString("actualId").orEmpty().trim()
-            val match = result?.optString("match").orEmpty()
-
-            if (actualId.isNotBlank()) {
-                if (actualId != villageId) {
-                    logEvent(
-                        "Resource Builder: mapping village diperbaiki — " +
-                            "$villageName: ID tersimpan=$villageId → ID aktual=$actualId (match=$match)"
-                    )
-                    // Gunakan ID aktual untuk verifikasi halaman berikutnya. Href resource
-                    // tetap memakai target resource yang sudah disimpan untuk village ini.
-                    builderVillages[builderVillageIndex] = actualId to villageName
-                }
-                val targetUrl = "$server/dorf1.php?newdid=$actualId"
-                val currentId = Regex("[?&]newdid=(\\d+)", RegexOption.IGNORE_CASE)
-                    .find(automationWebView()?.url.orEmpty())?.groupValues?.getOrNull(1).orEmpty()
-                val clicked = result?.optBoolean("clicked", false) == true
-                if (currentId == actualId) {
-                    handler.postDelayed({ openSavedBuilderResource() }, 400)
-                } else if (clicked) {
-                    logEvent("Resource Builder: klik village $villageName (ID $actualId) — menunggu halaman village aktif")
-                    handler.postDelayed({
-                        if (running && builderInProgress) {
-                            automationWebView()?.loadUrl(targetUrl)
-                        }
-                    }, 1800)
-                } else {
-                    logEvent("Resource Builder: pindah ke $villageName (ID $actualId)")
-                    automationWebView()?.loadUrl(targetUrl)
-                }
+            val result = raw.orEmpty().trim('"')
+            if (result == "clicked" || result == "loaded_saved_village") {
+                builderStage = "WAIT_VILLAGE"
+                logEvent(
+                    "Resource Builder: ${if (result == "clicked") "klik" else "buka link tersimpan"} " +
+                        "village ${village.second} (ID ${village.first}) dari dorf1.php"
+                )
+            } else if (builderAttempt < 3) {
+                builderAttempt++
+                handler.postDelayed({ clickBuilderVillageFromDorf() }, 350)
             } else {
-                logEvent("Resource Builder: village $villageName tidak ditemukan di sidebar; fallback ke ID tersimpan $villageId")
-                automationWebView()?.loadUrl("$server/dorf1.php?newdid=$villageId")
+                logEvent("Resource Builder: link village ${village.second} (ID ${village.first}) tidak ditemukan di dorf1.php")
+                builderVillageClickInProgress = false
+                pendingBuilderResourceHref = ""
+                goToNextBuilderVillage()
             }
         }
     }
@@ -1497,13 +1389,13 @@ class FarmAutomationService : Service() {
                 }
                 deficit.isEmpty() || deficit.all { it <= 0L } -> clickResourceUpgrade()
                 costs.size >= 4 && deficit.size >= 4 -> {
-                    pendingUpgradeCosts = LongArray(4) { deficit[it].coerceAtLeast(0L) }
+                    pendingUpgradeCosts = LongArray(4) { deficit[it].coerceAtLeast(0L).let { v -> if (v == 0L) 0L else ((v + 99L) / 100L) * 100L } }
                     pendingUpgradeUrl = webView?.url.orEmpty().ifBlank { "$server/build.php" }
                     val total = pendingUpgradeCosts.sum()
                     logEvent("Resource Builder: resource village kurang; kebutuhan inventory=${pendingUpgradeCosts.joinToString(",")}, total=$total")
                     inventoryUseAttempt = 0
                     updateNotification("Resource Builder — mengambil resource Hero")
-                    automationWebView()?.loadUrl("$server/hero")
+                    automationWebView()?.loadUrl("$server/hero/inventory")
                 }
                 else -> {
                     logEvent("Resource Builder: biaya upgrade tidak terbaca; village dilewati")
@@ -1565,9 +1457,9 @@ class FarmAutomationService : Service() {
                         );
                     });
                     if (!candidate) { missing.push(names[i]); continue; }
-                    const slot = candidate.closest('a,button,[role="button"],[data-item-id],[data-slot],.item,.slot,[class*="item"],[class*="slot"]') || candidate.parentElement || candidate;
+                    const slot = candidate.closest('[data-item-id],[data-slot],.item,.slot,[class*="item"],[class*="slot"]') || candidate.parentElement || candidate;
                     slot.scrollIntoView({block:'center'});
-                    if (typeof slot.click === 'function') slot.click(); else candidate.click();
+                    candidate.click();
                     used = true;
                     break;
                 }
@@ -1584,8 +1476,7 @@ class FarmAutomationService : Service() {
                     goToNextBuilderVillage()
                 }
                 result.contains("item_clicked") -> {
-                    logEvent("Resource Builder: item resource Hero diklik di /hero; menunggu dialog Transfer resources")
-                    handler.postDelayed({ fillHeroResourceDialog() }, 900)
+                    handler.postDelayed({ fillHeroResourceDialog() }, 600)
                 }
                 else -> handler.postDelayed({ useHeroInventoryForPendingUpgrade() }, 700)
             }
@@ -1600,18 +1491,11 @@ class FarmAutomationService : Service() {
             (() => {
                 const needed = [$needed];
                 const names = ['lumber','clay','iron','crop'];
-                const first = selectors => {
-                    for (const selector of selectors) {
-                        const el = document.querySelector(selector);
-                        if (el && !el.disabled) return el;
-                    }
-                    return null;
-                };
                 const inputs = [
-                    first(['input[name="lumber"]','input[name="wood"]','input[name="r1"]','input[id="r1"]','input.r1']),
-                    first(['input[name="clay"]','input[name="r2"]','input[id="r2"]','input.r2']),
-                    first(['input[name="iron"]','input[name="r3"]','input[id="r3"]','input.r3']),
-                    first(['input[name="crop"]','input[name="r4"]','input[id="r4"]','input.r4'])
+                    document.querySelector('input[name="lumber"]'),
+                    document.querySelector('input[name="clay"]'),
+                    document.querySelector('input[name="iron"]'),
+                    document.querySelector('input[name="crop"]')
                 ];
                 const setValue = (el, value) => {
                     if (!el) return false;
