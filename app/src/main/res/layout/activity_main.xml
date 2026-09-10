@@ -144,6 +144,18 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"/>
                     <TextView
+                        android:id="@+id/villageDatabaseView"
+                        android:text="DATABASE VILLAGE: kosong"
+                        android:textSize="10sp"
+                        android:typeface="monospace"
+                        android:textIsSelectable="true"
+                        android:padding="6dp"
+                        android:layout_marginTop="6dp"
+                        android:background="#202020"
+                        android:textColor="#FFFFFF"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"/>
+                    <TextView
                         android:text="Pilih village untuk Resource Builder"
                         android:textStyle="bold"
                         android:layout_marginTop="4dp"
