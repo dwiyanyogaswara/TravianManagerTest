@@ -1089,7 +1089,7 @@ class FarmAutomationService : Service() {
     }
 
     private fun saveDebugResourceBuilderVillageLink(villageId: String) {
-        val prefs = overridePrefs ?: getSharedPreferences(PREFS, MODE_PRIVATE)
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         val targetUrl = "$server/dorf1.php?newdid=$villageId"
         prefs.edit()
             .putString("debug_last_resource_builder_village_link", targetUrl)
