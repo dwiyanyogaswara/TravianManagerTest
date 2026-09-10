@@ -34,6 +34,28 @@ import java.util.Locale
 import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
+    companion object {
+        private var instanceRef: java.lang.ref.WeakReference<MainActivity>? = null
+
+        fun requestVillageRefreshFromService(): Boolean {
+            val activity = instanceRef?.get() ?: return false
+            activity.runOnUiThread {
+                if (!activity.isFinishing) {
+                    activity.logEvent("AUTO: REFRESH VILLAGE dijalankan 1 menit setelah Next Run")
+                    activity.villageScanActive = false
+                    activity.villageScanTargets.clear()
+                    activity.villageScanResults.clear()
+                    activity.villageScanIndex = 0
+                    activity.villageScanExpected = 0
+                    activity.villageScanRetry = 0
+                    activity.villageScanPageRetry = 0
+                    activity.villageScanDataRetry = 0
+                    activity.refreshVillagesForUi()
+                }
+            }
+            return true
+        }
+    }
     private lateinit var webView: WebView
     private lateinit var farmStatus: TextView
     private lateinit var status: TextView
@@ -155,6 +177,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         debugTrace("ENTER onCreate")
         super.onCreate(savedInstanceState)
+        instanceRef = java.lang.ref.WeakReference(this)
         setContentView(R.layout.activity_main)
 
         farmTab = findViewById(R.id.farmTab)
@@ -2634,6 +2657,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        if (instanceRef?.get() === this) instanceRef = null
         debugTrace("ENTER onDestroy")
         villageScanActive = false
         villageScanTargets.clear()
