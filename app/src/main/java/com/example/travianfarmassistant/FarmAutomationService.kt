@@ -532,34 +532,75 @@ class FarmAutomationService : Service() {
 
             if (builderInProgress && lower.contains("dorf1.php")) {
                 val expectedId = builderVillages.getOrNull(builderVillageIndex)?.first.orEmpty()
-                val currentId = Regex("[?&]newdid=(\\d+)", RegexOption.IGNORE_CASE)
-                    .find(lower)?.groupValues?.getOrNull(1).orEmpty()
 
                 if (builderVillages.isEmpty()) {
                     builderStage = "DISCOVER"
                     handler.postDelayed({ discoverVillagesForBuilder() }, 700)
-                } else if (expectedId.isNotBlank() && currentId == expectedId &&
-                    pendingBuilderResourceHref.isNotBlank()) {
-                    // Village yang benar sudah aktif. SEKARANG baru buka href
-                    // resource yang telah disimpan oleh scanner.
-                    if (builderStage != "OPEN_RESOURCE" && builderStage != "WAIT_UPGRADE" &&
-                        builderStage != "ADVANCING") {
-                        builderStage = "OPEN_RESOURCE"
-                        handler.postDelayed({ openSavedBuilderResource() }, 500)
+                    return@acceptCookiesIfPresent
+                }
+
+                if (expectedId.isNotBlank() && pendingBuilderResourceHref.isNotBlank()) {
+                    // Travian dapat redirect /dorf1.php?newdid=ID menjadi /dorf1.php.
+                    // Karena itu verifikasi village aktif dari sidebar, sama seperti
+                    // mekanisme REFRESH VILLAGE, lalu buka LinkResource dari database.
+                    val expectedJson = JSONObject.quote(expectedId)
+                    automationWebView()?.evaluateJavascript("""
+                        (() => {
+                            const expected = $expectedJson;
+                            const urlId = location.href.match(/[?&]newdid=(\d+)/i)?.[1] || '';
+                            const selectors = [
+                                '#sidebarBoxVillagelist .listEntry.active',
+                                '#sidebarBoxVillagelist .listEntry.selected',
+                                '.villageList .listEntry.active',
+                                '.villageList .listEntry.selected',
+                                '[data-did].active'
+                            ];
+                            let active = null;
+                            for (const selector of selectors) {
+                                try { active = document.querySelector(selector); if (active) break; } catch (_) {}
+                            }
+                            const activeId = active?.getAttribute('data-did') || '';
+                            const currentId = /^\d+$/.test(urlId) ? urlId : activeId;
+                            return JSON.stringify({ok: currentId === expected, currentId, activeId, urlId});
+                        })();
+                    """.trimIndent()) { raw ->
+                        val result = raw.orEmpty().trim('"').replace("\"", """)
+                        val currentId = Regex("\"currentId\":\"(\d*)\"").find(result)
+                            ?.groupValues?.getOrNull(1).orEmpty()
+                        if (result.contains("\"ok\":true")) {
+                            if (builderStage != "OPEN_RESOURCE" && builderStage != "WAIT_UPGRADE" && builderStage != "ADVANCING") {
+                                builderStage = "OPEN_RESOURCE"
+                                logEvent("Resource Builder: village aktif benar ($expectedId); membuka Link Resource dari database")
+                                handler.postDelayed({ openSavedBuilderResource() }, 300)
+                            }
+                        } else if (builderAttempt < 5) {
+                            builderAttempt++
+                            logEvent("Resource Builder: menunggu village aktif — expected=$expectedId current=${currentId.ifBlank { "-" }}; retry=$builderAttempt")
+                            handler.postDelayed({
+                                if (running && builderInProgress) {
+                                    val saved = builderVillageLinks[expectedId].orEmpty().trim()
+                                    val target = saved.ifBlank { "$server/dorf1.php?newdid=$expectedId" }
+                                    automationWebView()?.loadUrl(absoluteBuilderHref(target))
+                                }
+                            }, 600)
+                        } else {
+                            logEvent("Resource Builder: gagal memastikan village aktif $expectedId; village dilewati")
+                            builderAttempt = 0
+                            pendingBuilderResourceHref = ""
+                            goToNextBuilderVillage()
+                        }
                     }
-                } else if (builderStage == "LOAD_DORF" || builderStage == "CLICK_VILLAGE") {
-                    // Masih berada di daftar village: klik village yang dipilih.
+                    return@acceptCookiesIfPresent
+                }
+
+                if (builderStage == "LOAD_DORF" || builderStage == "CLICK_VILLAGE") {
                     builderStage = "CLICK_VILLAGE"
                     handler.postDelayed({ clickBuilderVillageFromDorf() }, 400)
                 } else {
-                    // Jangan pernah memanggil processResourceBuilderVillage() dari
-                    // onPageFinished dorf1.php secara membabi buta. Ini sebelumnya
-                    // menyebabkan loop dan bahkan bisa mengklik tombol Rally Point.
-                    logEvent("Resource Builder: dorf1 menunggu village target; stage=$builderStage current=$currentId expected=$expectedId")
+                    logEvent("Resource Builder: dorf1 menunggu village target; stage=$builderStage expected=$expectedId")
                 }
                 return@acceptCookiesIfPresent
             }
-
             if (builderInProgress && lower.contains("build.php") && !lower.contains("gid=16")) {
                 builderStage = "INSPECT_UPGRADE"
                 handler.postDelayed({ inspectUpgradeResources() }, 700)
@@ -572,6 +613,7 @@ class FarmAutomationService : Service() {
             }
 
             if (isLikelyLoginPage(lower)) {
+                clearVillageDatabaseOnLogout(url)
                 if (username.isNotBlank() && password.isNotBlank()) {
                     loginInProgress = true
                     reloginRequested = true
@@ -591,6 +633,23 @@ class FarmAutomationService : Service() {
                 detectLoginFormForScheduler()
             }
         }
+    }
+
+    private fun clearVillageDatabaseOnLogout(url: String) {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        val raw = prefs.getString("village_data_json", "[]").orEmpty()
+        if (raw == "[]" || raw.isBlank()) return
+        prefs.edit()
+            .remove("village_data_json")
+            .remove("resource_builder_targets_json")
+            .remove("resource_builder_villages_json")
+            .remove("resource_builder_selected_villages")
+            .apply()
+        builderVillages.clear()
+        builderVillageLinks.clear()
+        builderResourceLinks.clear()
+        builderResourceLevels.clear()
+        logEvent("LOGOUT/LOGIN TERDETEKSI — database village dihapus; url=$url")
     }
 
     private fun isLikelyLoginPage(url: String): Boolean {

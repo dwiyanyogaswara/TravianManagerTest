@@ -410,6 +410,10 @@ class MainActivity : Activity() {
 
                 val lower = url.lowercase(Locale.US)
 
+                if (isLikelyLoginPage(lower)) {
+                    clearVillageDatabaseOnLogout(url)
+                }
+
                 // ConsentManager yang dipakai situs dapat berada di Shadow DOM.
                 // Jangan lanjut login / parsing Farm List sampai layer consent benar-benar hilang.
                 handlePageAfterConsent(url, lower, 0)
@@ -589,6 +593,22 @@ class MainActivity : Activity() {
         logEvent("Memulai login ke $server sebagai $pendingUsername")
 
         webView.loadUrl(server)
+    }
+
+    private fun clearVillageDatabaseOnLogout(url: String) {
+        val prefs = getSharedPreferences("config", MODE_PRIVATE)
+        val raw = prefs.getString(villageDataPrefsKey, "[]").orEmpty()
+        if (raw == "[]" || raw.isBlank()) return
+        prefs.edit()
+            .remove(villageDataPrefsKey)
+            .remove("resource_builder_targets_json")
+            .remove("resource_builder_villages_json")
+            .remove("resource_builder_selected_villages")
+            .apply()
+        loadedVillages.clear()
+        if (::villageChecklist.isInitialized) villageChecklist.removeAllViews()
+        updateVillageDatabaseView()
+        logEvent("LOGOUT/LOGIN TERDETEKSI — database village dihapus; url=$url")
     }
 
     private fun isLikelyLoginPage(url: String): Boolean {
