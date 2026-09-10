@@ -68,6 +68,7 @@ class MainActivity : Activity() {
     private lateinit var passwordInput: EditText
     private lateinit var refreshVillageLinkPreview: TextView
     private lateinit var resourceBuilderVillageLinkPreview: TextView
+    private lateinit var villageDatabaseView: TextView
     private lateinit var villageChecklist: LinearLayout
     private var loadedVillages = linkedMapOf<String, String>()
 
@@ -126,6 +127,7 @@ class MainActivity : Activity() {
         getSharedPreferences("config", MODE_PRIVATE).edit()
             .putString(villageDataPrefsKey, array.toString())
             .apply()
+        updateVillageDatabaseView()
     }
 
     private fun upsertVillageDataRecord(
@@ -730,8 +732,28 @@ class MainActivity : Activity() {
         loadedVillages.clear()
     }
 
+    private fun updateVillageDatabaseView() {
+        if (!::villageDatabaseView.isInitialized) return
+        val records = loadVillageDataRecords()
+        if (records.isEmpty()) {
+            villageDatabaseView.text = "DATABASE VILLAGE: kosong"
+            return
+        }
+
+        val lines = mutableListOf<String>()
+        lines += "DATABASE VILLAGE (${records.size})"
+        lines += "CHK | NAMA | ID | LINK VILLAGE | LINK RESOURCE | MIN LVL"
+        lines += "----+------+----+--------------+---------------+-------"
+        records.forEach { item ->
+            lines += "${if (item.isChecklist) "✓" else "-"} | ${item.namaVillage} | ${item.id} | ${item.linkVillage.ifBlank { "-" }} | ${item.linkResource.ifBlank { "-" }} | ${if (item.minLvl >= 0) "L${item.minLvl}" else "-"}"
+        }
+        villageDatabaseView.text = lines.joinToString("\n")
+        villageDatabaseView.setTextIsSelectable(true)
+    }
+
     private fun renderVillageChecklist(villages: List<Pair<String, String>>) {
         debugTrace("ENTER renderVillageChecklist")
+        updateVillageDatabaseView()
         val prefs = getSharedPreferences("config", MODE_PRIVATE)
         val villageRecords = loadVillageDataRecords().associateBy { it.id }
         val saved = villageRecords.filterValues { it.isChecklist }.keys
@@ -2451,6 +2473,7 @@ class MainActivity : Activity() {
 
     private fun refreshRecentLogs() {
         updateVillageLinkPreviews()
+        updateVillageDatabaseView()
         if (!::recentLogs.isInitialized || isFinishing) return
         recentLogs.setTextIsSelectable(true)
         logIoExecutor.execute {

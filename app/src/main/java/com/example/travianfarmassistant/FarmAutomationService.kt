@@ -1065,19 +1065,26 @@ class FarmAutomationService : Service() {
 
         builderAttempt = 0
         pendingBuilderResourceHref = resourceHref
-        builderVillageClickInProgress = true
-        builderStage = "LOAD_DORF"
+        builderVillageClickInProgress = false
+        builderStage = "WAIT_VILLAGE"
         val savedLevel = builderResourceLevels[villageId]
+        val savedVillageHref = builderVillageLinks[villageId].orEmpty().trim()
+        val villageUrl = if (savedVillageHref.isNotBlank() &&
+            Regex("[?&]newdid=${Regex.escape(villageId)}(?:&|$)", RegexOption.IGNORE_CASE).containsMatchIn(savedVillageHref)) {
+            absoluteBuilderHref(savedVillageHref)
+        } else {
+            "$server/dorf1.php?newdid=$villageId"
+        }
+        saveDebugResourceBuilderVillageLink(villageId, savedVillageHref.ifBlank { villageUrl })
         logEvent(
             "Resource Builder: village ${builderVillageIndex + 1}/${builderVillages.size} — $villageName (ID $villageId); " +
-                "target=${resourceHref}${savedLevel?.let { "; level=L$it" } ?: ""}"
+                "LINK VILLAGE=$villageUrl; target=${resourceHref}${savedLevel?.let { "; level=L$it" } ?: ""}"
         )
         updateNotification("Resource Builder — ${builderVillageIndex + 1}/${builderVillages.size}: $villageName")
 
-        // Selalu kembali ke dorf1.php. Dari sana bot benar-benar klik village yang
-        // dicentang, baru setelah halaman village terbuka mengikuti href resource
-        // yang sudah disimpan saat pencarian level terendah.
-        automationWebView()?.loadUrl("$server/dorf1.php")
+        // Tidak lagi rediscovery/klik sidebar. Link Village sudah disimpan saat
+        // REFRESH VILLAGE dan sekarang dipakai langsung untuk berpindah context.
+        automationWebView()?.loadUrl(villageUrl)
     }
 
     private fun openSavedBuilderResource(): Unit {
@@ -1152,9 +1159,9 @@ class FarmAutomationService : Service() {
         }
     }
 
-    private fun saveDebugResourceBuilderVillageLink(villageId: String) {
+    private fun saveDebugResourceBuilderVillageLink(villageId: String, savedVillageHref: String = "") {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-        val targetUrl = "$server/dorf1.php?newdid=$villageId"
+        val targetUrl = savedVillageHref.trim().ifBlank { "$server/dorf1.php?newdid=$villageId" }
         prefs.edit()
             .putString("debug_last_resource_builder_village_link", targetUrl)
             .apply()
@@ -1162,94 +1169,21 @@ class FarmAutomationService : Service() {
 
     private fun clickBuilderVillageFromDorf(): Unit {
         debugTrace("ENTER clickBuilderVillageFromDorf")
-        if (!running || !builderInProgress || !builderVillageClickInProgress) return
+        if (!running || !builderInProgress) return
         val village = builderVillages.getOrNull(builderVillageIndex) ?: return
-        saveDebugResourceBuilderVillageLink(village.first)
         val savedVillageHref = builderVillageLinks[village.first].orEmpty().trim()
-        val idJson = JSONObject.quote(village.first)
-        val nameJson = JSONObject.quote(village.second)
-        val hrefJson = JSONObject.quote(savedVillageHref)
-        val js = """
-            (() => {
-                const id = $idJson;
-                const name = $nameJson;
-                const savedHref = $hrefJson;
-                const clean = s => String(s || '').replace(/\s+/g,' ').trim();
-                const sameHref = (a, b) => {
-                    if (!a || !b || b === '#') return false;
-                    const absA = new URL(a, location.href).href.split('#')[0];
-                    const absB = new URL(b, location.href).href.split('#')[0];
-                    return absA === absB;
-                };
-                const anchors = [...document.querySelectorAll('a[href], [data-did]')];
-                let anchor = null;
-
-                // Prioritas 1: link village yang memang sudah disimpan saat scan.
-                if (savedHref && savedHref !== '#') {
-                    anchor = anchors.find(a => {
-                        const h = a.getAttribute('href') || '';
-                        return sameHref(h, savedHref);
-                    }) || null;
-                }
-
-                // Prioritas 2: data-did / newdid dari village yang sama.
-                if (!anchor) {
-                    anchor = anchors.find(a => {
-                        const entry = a.closest('.listEntry, .dropContainer, li');
-                        const dataDid = a.getAttribute('data-did') || entry?.getAttribute('data-did') || '';
-                        const href = a.getAttribute('href') || '';
-                        const hrefDid = href.match(/[?&]newdid=(\d+)/i)?.[1] || '';
-                        return dataDid === id || hrefDid === id;
-                    }) || null;
-                }
-
-                if (anchor) {
-                    anchor.scrollIntoView({block:'center', inline:'nearest'});
-                    anchor.click();
-                    // Link village Travian sering membuka build.php?id=39 (Rally Point)
-                    // sambil mengganti context village. Builder harus kembali ke dorf1.php
-                    // agar tahap berikutnya bisa memverifikasi village lalu membuka target
-                    // resource tersimpan. Ini mengikuti mekanisme Refresh Village.
-                    setTimeout(() => {
-                        const current = location.href.match(/[?&]newdid=(\d+)/i)?.[1] || '';
-                        const active = document.querySelector(
-                            '#sidebarBoxVillagelist .listEntry.active, .villageList .listEntry.active'
-                        )?.getAttribute('data-did') || '';
-                        AndroidFarm.onLiveClickResult(JSON.stringify({
-                            kind:'AUTO_VILLAGE_CLICK_VERIFY', id, current, active, pageUrl:location.href
-                        }));
-                        location.href = '/dorf1.php?newdid=' + encodeURIComponent(id);
-                    }, 2200);
-                    return 'clicked';
-                }
-
-                // Last resort: jika Travian tidak merender anchor village tetapi
-                // snapshot memiliki href village yang valid, buka link tersimpan.
-                if (savedHref && savedHref !== '#' && /newdid=\d+/i.test(savedHref)) {
-                    location.href = new URL(savedHref, location.href).href;
-                    return 'loaded_saved_village';
-                }
-                return 'not-found';
-            })();
-        """.trimIndent()
-        automationWebView()?.evaluateJavascript(js) { raw ->
-            val result = raw.orEmpty().trim('"')
-            if (result == "clicked" || result == "loaded_saved_village") {
-                builderStage = "WAIT_VILLAGE"
-                logEvent(
-                    "Resource Builder: ${if (result == "clicked") "klik" else "buka link tersimpan"} " +
-                        "village ${village.second} (ID ${village.first}) dari dorf1.php"
-                )
-            } else if (builderAttempt < 3) {
-                builderAttempt++
-                handler.postDelayed({ clickBuilderVillageFromDorf() }, 350)
-            } else {
-                logEvent("Resource Builder: link village ${village.second} (ID ${village.first}) tidak ditemukan di dorf1.php")
-                builderVillageClickInProgress = false
-                pendingBuilderResourceHref = ""
-                goToNextBuilderVillage()
-            }
+        val targetUrl = if (savedVillageHref.isNotBlank() &&
+            Regex("[?&]newdid=${Regex.escape(village.first)}(?:&|$)", RegexOption.IGNORE_CASE).containsMatchIn(savedVillageHref)) {
+            absoluteBuilderHref(savedVillageHref)
+        } else {
+            "$server/dorf1.php?newdid=${village.first}"
         }
+        saveDebugResourceBuilderVillageLink(village.first, savedVillageHref.ifBlank { targetUrl })
+        pendingBuilderResourceHref = builderResourceLinks[village.first].orEmpty()
+        builderVillageClickInProgress = false
+        builderStage = "WAIT_VILLAGE"
+        logEvent("Resource Builder: menggunakan LINK VILLAGE tersimpan untuk ${village.second} (ID ${village.first}) — $targetUrl")
+        automationWebView()?.loadUrl(targetUrl)
     }
 
     private fun inspectResourceVillage(): Unit {
