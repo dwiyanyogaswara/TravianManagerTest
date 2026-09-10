@@ -340,6 +340,8 @@ class MainActivity : Activity() {
         resourceBuilderCheck.isChecked = prefs.getBoolean("resource_builder_enabled", true)
 
         villageChecklist = findViewById(R.id.villageChecklist)
+        villageDatabaseView = findViewById(R.id.villageDatabaseView)
+        updateVillageDatabaseView()
         restoreVillageSelection(prefs)
 
         findViewById<Button>(R.id.refreshVillages).setOnClickListener {
