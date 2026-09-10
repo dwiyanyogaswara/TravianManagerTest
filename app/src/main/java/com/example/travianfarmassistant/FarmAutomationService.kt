@@ -162,7 +162,6 @@ class FarmAutomationService : Service() {
     private val builderResourceLevels = linkedMapOf<String, Int>()
     private var pendingBuilderResourceHref = ""
     private var builderVillageClickInProgress = false
-    private var builderDirectVillageNavigation = false
     private var builderDiscoverInFlight = false
     // State machine agar callback onPageFinished tidak menjalankan Builder
     // berulang-ulang pada dorf1.php atau salah mengklik tombol di halaman lain.
@@ -467,19 +466,9 @@ class FarmAutomationService : Service() {
                 return@acceptCookiesIfPresent
             }
 
-            if (builderDirectVillageNavigation && pendingBuilderResourceHref.isNotBlank()) {
-                builderDirectVillageNavigation = false
-                builderVillageClickInProgress = false
-                builderStage = "OPEN_RESOURCE"
-                val directVillageName = builderVillages.getOrNull(builderVillageIndex)?.second ?: "village"
-                logEvent("Resource Builder: $directVillageName — village berhasil dibuka via link tersimpan; lanjut ke target resource")
-                handler.postDelayed({ openSavedBuilderResource() }, 900)
-                return@acceptCookiesIfPresent
-            }
-
             if (builderInProgress && lower.contains("dorf1.php")) {
                 val expectedId = builderVillages.getOrNull(builderVillageIndex)?.first.orEmpty()
-                val currentId = Regex("[?&]newdid=([0-9]+)", RegexOption.IGNORE_CASE)
+                val currentId = Regex("[?&]newdid=(\\d+)", RegexOption.IGNORE_CASE)
                     .find(lower)?.groupValues?.getOrNull(1).orEmpty()
 
                 if (builderVillages.isEmpty()) {
@@ -700,8 +689,8 @@ class FarmAutomationService : Service() {
                 farmListLastState = ""
                 farmListStableChecks = 0
                 fallbackFarmListMode = false
-                raidCountBeforeStartAll = Regex("\"before\":([0-9]+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-                farmListBeforeReady = Regex("\"readyBefore\":([0-9]+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                raidCountBeforeStartAll = Regex("\"before\":(\\d+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                farmListBeforeReady = Regex("\"readyBefore\":(\\d+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
                 val now = timeFormat.format(Date())
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("last_run", now).apply()
                 logEvent("Send All Farm Lists diklik; raid aktif sebelum klik=$raidCountBeforeStartAll; tombol Farm List siap sebelum klik=$farmListBeforeReady")
@@ -783,10 +772,10 @@ class FarmAutomationService : Service() {
 
         automationWebView()?.evaluateJavascript(js) { raw ->
             val result = raw.orEmpty().trim('"').replace("\\\"", "\"")
-            val current = Regex("\"total\":([0-9]+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-            val ready = Regex("\"ready\":([0-9]+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val current = Regex("\"total\":(\\d+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val ready = Regex("\"ready\":(\\d+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
             val busy = Regex("\"busy\":(true|false)").find(result)?.groupValues?.get(1) == "true"
-            val wrappers = Regex("\"wrappers\":([0-9]+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val wrappers = Regex("\"wrappers\":(\\d+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
             if (current > raidCountBeforeStartAll || ready < farmListBeforeReady || busy) {
                 farmListProgressObserved = true
@@ -856,8 +845,8 @@ class FarmAutomationService : Service() {
         """.trimIndent()
         automationWebView()?.evaluateJavascript(js) { raw ->
             val result = raw.orEmpty().trim('"').replace("\\\"", "\"")
-            val clicked = Regex("\"clicked\":([0-9]+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-                farmListBeforeReady = Regex("\"readyBefore\":([0-9]+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val clicked = Regex("\"clicked\":(\\d+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                farmListBeforeReady = Regex("\"readyBefore\":(\\d+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
             farmListProgressObserved = false
             farmListLastState = ""
             farmListStableChecks = 0
@@ -893,8 +882,8 @@ class FarmAutomationService : Service() {
 
         automationWebView()?.evaluateJavascript(js) { raw ->
             val result = raw.orEmpty().trim('"').replace("\\\"", "\"")
-            val current = Regex("\"total\":([0-9]+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-            val wrappers = Regex("\"wrappers\":([0-9]+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val current = Regex("\"total\":(\\d+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val wrappers = Regex("\"wrappers\":(\\d+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
             val busy = Regex("\"busy\":(true|false)").find(result)?.groupValues?.get(1) == "true"
 
             raidVerificationAttempt++
@@ -1168,19 +1157,10 @@ class FarmAutomationService : Service() {
                 builderAttempt++
                 handler.postDelayed({ clickBuilderVillageFromDorf() }, 350)
             } else {
-                val savedVillageHref = builderVillageLinks[village.first].orEmpty().trim()
-                if (savedVillageHref.isNotBlank() && savedVillageHref != "#") {
-                    val targetVillageUrl = absoluteBuilderHref(savedVillageHref)
-                    builderDirectVillageNavigation = true
-                    builderStage = "WAIT_VILLAGE"
-                    logEvent("Resource Builder: sidebar tidak terbaca; pindah ke ${village.second} via link village tersimpan")
-                    automationWebView()?.loadUrl(targetVillageUrl)
-                } else {
-                    builderDirectVillageNavigation = true
-                    builderStage = "WAIT_VILLAGE"
-                    logEvent("Resource Builder: sidebar tidak terbaca dan link village tersimpan kosong; fallback ke ID ${village.first}")
-                    automationWebView()?.loadUrl("$server/dorf1.php?newdid=${village.first}")
-                }
+                logEvent("Resource Builder: link village ${village.second} (ID ${village.first}) tidak ditemukan di dorf1.php")
+                builderVillageClickInProgress = false
+                pendingBuilderResourceHref = ""
+                goToNextBuilderVillage()
             }
         }
     }
@@ -1255,8 +1235,8 @@ class FarmAutomationService : Service() {
                     goToNextBuilderVillage()
                 }
                 result.contains("candidate") -> {
-                    val idMatch = Regex("\\\"id\\\":\\\"?([0-9]+)").find(result)
-                    val levelMatch = Regex("\\\"level\\\":([0-9]+)").find(result)
+                    val idMatch = Regex("\\\"id\\\":\\\"?(\\d+)").find(result)
+                    val levelMatch = Regex("\\\"level\\\":(\\d+)").find(result)
                     val id = idMatch?.groupValues?.get(1)
                     val level = levelMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
                     if (id == null) {
@@ -1272,7 +1252,7 @@ class FarmAutomationService : Service() {
         }
     }
 
-    private fun inspectUpgradeResources() {
+    private fun inspectUpgradeResources(): Unit {
         debugTrace("ENTER inspectUpgradeResources")
         if (!running || !builderInProgress) return
 
