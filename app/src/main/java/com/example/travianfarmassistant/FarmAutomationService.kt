@@ -162,6 +162,7 @@ class FarmAutomationService : Service() {
     private val builderResourceLevels = linkedMapOf<String, Int>()
     private var pendingBuilderResourceHref = ""
     private var builderVillageClickInProgress = false
+    private var builderDirectVillageNavigation = false
     private var builderDiscoverInFlight = false
     // State machine agar callback onPageFinished tidak menjalankan Builder
     // berulang-ulang pada dorf1.php atau salah mengklik tombol di halaman lain.
@@ -463,6 +464,16 @@ class FarmAutomationService : Service() {
                     startAllAttempt = 0
                     handler.postDelayed({ clickStartAllFarmLists() }, 1200)
                 }
+                return@acceptCookiesIfPresent
+            }
+
+            if (builderDirectVillageNavigation && pendingBuilderResourceHref.isNotBlank()) {
+                builderDirectVillageNavigation = false
+                builderVillageClickInProgress = false
+                builderStage = "OPEN_RESOURCE"
+                val directVillageName = builderVillages.getOrNull(builderVillageIndex)?.second ?: "village"
+                logEvent("Resource Builder: $directVillageName — village berhasil dibuka via link tersimpan; lanjut ke target resource")
+                handler.postDelayed({ openSavedBuilderResource() }, 900)
                 return@acceptCookiesIfPresent
             }
 
@@ -1157,10 +1168,19 @@ class FarmAutomationService : Service() {
                 builderAttempt++
                 handler.postDelayed({ clickBuilderVillageFromDorf() }, 350)
             } else {
-                logEvent("Resource Builder: link village ${village.second} (ID ${village.first}) tidak ditemukan di dorf1.php")
-                builderVillageClickInProgress = false
-                pendingBuilderResourceHref = ""
-                goToNextBuilderVillage()
+                val savedVillageHref = builderVillageLinks[village.first].orEmpty().trim()
+                if (savedVillageHref.isNotBlank() && savedVillageHref != "#") {
+                    val targetVillageUrl = absoluteBuilderHref(savedVillageHref)
+                    builderDirectVillageNavigation = true
+                    builderStage = "WAIT_VILLAGE"
+                    logEvent("Resource Builder: sidebar tidak terbaca; pindah ke ${village.second} via link village tersimpan")
+                    automationWebView()?.loadUrl(targetVillageUrl)
+                } else {
+                    builderDirectVillageNavigation = true
+                    builderStage = "WAIT_VILLAGE"
+                    logEvent("Resource Builder: sidebar tidak terbaca dan link village tersimpan kosong; fallback ke ID ${village.first}")
+                    automationWebView()?.loadUrl("$server/dorf1.php?newdid=${village.first}")
+                }
             }
         }
     }

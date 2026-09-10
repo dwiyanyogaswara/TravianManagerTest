@@ -124,7 +124,6 @@ class MainActivity : Activity() {
     private var villageScanIndex = 0
     private var villageScanResults = mutableListOf<Pair<String, String>>()
     private val villageMinLevels = mutableMapOf<String, Int>()
-    private val villageMinResourceDetails = mutableMapOf<String, Pair<String, String>>()
     private var villageScanExpected = 0
     private var villageScanRetry = 0
     private var villageScanPageRetry = 0
@@ -174,8 +173,8 @@ class MainActivity : Activity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         debugTrace("ENTER onCreate")
-        instanceRef = java.lang.ref.WeakReference(this)
         super.onCreate(savedInstanceState)
+        instanceRef = java.lang.ref.WeakReference(this)
         setContentView(R.layout.activity_main)
 
         farmTab = findViewById(R.id.farmTab)
@@ -622,15 +621,10 @@ class MainActivity : Activity() {
             if (id.isNotBlank()) {
                 val villageName = name.ifBlank { "Village $id" }
                 val minLevel = villageMinLevels[id]
-                val resourceDetail = villageMinResourceDetails[id]
                 loadedVillages[id] = if (minLevel != null && minLevel >= 0) {
-                    if (resourceDetail != null) {
-                        "$villageName - Lvl $minLevel ${resourceDetail.first} ${resourceDetail.second}"
-                    } else {
-                        "$villageName - Lvl $minLevel"
-                    }
+                    "$villageName - lvl $minLevel"
                 } else {
-                    "$villageName - Lvl ?"
+                    "$villageName - lvl ?"
                 }
             }
         }
@@ -843,7 +837,6 @@ class MainActivity : Activity() {
         villageScanTargets.clear()
         villageScanResults.clear()
         villageMinLevels.clear()
-        villageMinResourceDetails.clear()
         villageScanIndex = 0
         villageScanExpected = 0
         villageScanRetry = 0
@@ -1046,7 +1039,6 @@ class MainActivity : Activity() {
         villageScanTargets = discovered.toMutableList()
         villageScanResults.clear()
         villageMinLevels.clear()
-        villageMinResourceDetails.clear()
         villageScanIndex = 0
         villageScanRetry = 0
         villageScanDataRetry = 0
@@ -1371,12 +1363,7 @@ class MainActivity : Activity() {
                 );
 
                 AndroidFarm.onVillageScanResult(JSON.stringify({
-                    id:expectedId, name:pageName,
-                    // IMPORTANT: minLevel harus berasal dari resource field yang benar-benar
-                    // punya href build.php?id=..., bukan dari node/dekorasi lain di container.
-                    // Kalau tidak, node lain bisa membuat C2 terbaca L2 padahal resource field
-                    // terendah sebenarnya lebih tinggi.
-                    minLevel:lowestResource ? lowestResource.level : -1,
+                    id:expectedId, name:pageName, minLevel:Math.min(...uniqueLevels),
                     fields:uniqueLevels, fieldNodeCount:fieldNodes.length,
                     debugFieldCount:debugFields.length, debugFields,
                     resourceContainer:true, activeId, activeName, url, resources, lowestResource
@@ -1444,18 +1431,6 @@ class MainActivity : Activity() {
         val lowestResourceHref = lowestResource?.optString("href", "").orEmpty()
 
         villageMinLevels[id] = minLevel
-        if (lowestResourceLevel >= 0 && lowestResourceId.isNotBlank()) {
-            val resourceType = when (lowestResourceId.toIntOrNull()) {
-                in 1..4 -> "Wood"
-                in 5..8 -> "Clay"
-                in 9..12 -> "Iron"
-                in 13..18 -> "Crop"
-                else -> "Resource"
-            }
-            villageMinResourceDetails[id] = resourceType to "id$lowestResourceId"
-        } else {
-            villageMinResourceDetails.remove(id)
-        }
 
         val progress = "${villageScanIndex + 1}/${villageScanTargets.size}"
 
@@ -2634,8 +2609,8 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        debugTrace("ENTER onDestroy")
         if (instanceRef?.get() === this) instanceRef = null
+        debugTrace("ENTER onDestroy")
         villageScanActive = false
         villageScanTargets.clear()
         FarmAutomationService.detachVisibleWebView(webView)
