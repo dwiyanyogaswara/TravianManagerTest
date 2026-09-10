@@ -467,7 +467,9 @@ class FarmAutomationService : Service() {
             }
 
             if (builderInProgress && lower.contains("dorf1.php")) {
-                val expectedId = builderVillages.getOrNull(builderVillageIndex)?.first.orEmpty()
+                val expectedVillage = builderVillages.getOrNull(builderVillageIndex)
+                val expectedId = expectedVillage?.first.orEmpty()
+                val expectedName = expectedVillage?.second.orEmpty()
                 val currentId = Regex("[?&]newdid=(\\d+)", RegexOption.IGNORE_CASE)
                     .find(lower)?.groupValues?.getOrNull(1).orEmpty()
 
@@ -476,14 +478,46 @@ class FarmAutomationService : Service() {
                     handler.postDelayed({ discoverVillagesForBuilder() }, 700)
                 } else if (expectedId.isNotBlank() && currentId == expectedId &&
                     pendingBuilderResourceHref.isNotBlank()) {
-                    // Village yang benar sudah aktif. SEKARANG baru buka href
-                    // resource yang telah disimpan oleh scanner.
-                    if (builderStage != "OPEN_RESOURCE" && builderStage != "WAIT_UPGRADE" &&
-                        builderStage != "ADVANCING") {
-                        builderStage = "OPEN_RESOURCE"
-                        handler.postDelayed({ openSavedBuilderResource() }, 500)
+                    // ID cocok belum cukup: pastikan NAMA village aktif juga cocok.
+                    // Ini mencegah kasus C2 tersimpan tetapi WebView masih aktif di C4.
+                    val verifyJs = """
+                        (() => {
+                            const clean = s => String(s || '').replace(/\s+/g,' ').trim();
+                            const norm = s => clean(s)
+                                .replace(/\(\s*[−-]?\d+\s*\|\s*[−-]?\d+\s*\)/g, '')
+                                .trim().toLowerCase();
+                            const wanted = norm(${JSONObject.quote(expectedName)});
+                            const active = document.querySelector(
+                                '#sidebarBoxVillagelist .listEntry.active, #sidebarBoxVillagelist .listEntry.selected, ' +
+                                '#sidebarBoxVillagelist .dropContainer.active, #sidebarBoxVillagelist .dropContainer.selected, ' +
+                                '.villageList .listEntry.active, .villageList .listEntry.selected'
+                            );
+                            const activeName = norm(
+                                active?.querySelector('.name')?.textContent ||
+                                active?.textContent || ''
+                            );
+                            return JSON.stringify({ok: !wanted || !activeName || activeName === wanted, activeName});
+                        })();
+                    """.trimIndent()
+                    automationWebView()?.evaluateJavascript(verifyJs) { raw ->
+                        val decoded = raw.orEmpty().removePrefix("\"").removeSuffix("\"")
+                            .replace("\\\"", "\"").replace("\\\\", "\\")
+                        val verified = runCatching { JSONObject(decoded) }.getOrNull()
+                        val ok = verified?.optBoolean("ok", false) == true
+                        val activeName = verified?.optString("activeName").orEmpty()
+                        if (ok) {
+                            if (builderStage != "OPEN_RESOURCE" && builderStage != "WAIT_UPGRADE" &&
+                                builderStage != "ADVANCING") {
+                                builderStage = "OPEN_RESOURCE"
+                                handler.postDelayed({ openSavedBuilderResource() }, 500)
+                            }
+                        } else {
+                            logEvent("Resource Builder: ID benar tetapi village aktif masih '$activeName', target=$expectedName — ulangi pindah village")
+                            builderStage = "CLICK_VILLAGE"
+                            handler.postDelayed({ clickBuilderVillageFromDorf() }, 500)
+                        }
                     }
-                } else if (builderStage == "LOAD_DORF" || builderStage == "CLICK_VILLAGE") {
+                } else if (builderStage == "LOAD_DORF" || builderStage == "CLICK_VILLAGE" || builderStage == "WAIT_VILLAGE") {
                     // Masih berada di daftar village: klik village yang dipilih.
                     builderStage = "CLICK_VILLAGE"
                     handler.postDelayed({ clickBuilderVillageFromDorf() }, 400)
@@ -1177,7 +1211,15 @@ class FarmAutomationService : Service() {
                         kind:'AUTO_VILLAGE_RESOLVED', wantedId, wantedName,
                         actualId:foundId, href:foundHref, match, pageUrl:location.href
                     }));
-                    return JSON.stringify({ok:true, actualId:foundId, href:foundHref, match});
+                    // Klik entry village yang benar terlebih dahulu. Ini adalah sumber
+                    // perpindahan village utama; direct load URL hanya menjadi fallback.
+                    const clickable = found.matches('a') ? found : found.querySelector('a');
+                    if (clickable) {
+                        clickable.scrollIntoView({block:'center'});
+                        clickable.click();
+                        return JSON.stringify({ok:true, actualId:foundId, href:foundHref, match, clicked:true});
+                    }
+                    return JSON.stringify({ok:true, actualId:foundId, href:foundHref, match, clicked:false});
                 }
 
                 AndroidFarm.onLiveClickResult(JSON.stringify({
@@ -1210,8 +1252,16 @@ class FarmAutomationService : Service() {
                 val targetUrl = "$server/dorf1.php?newdid=$actualId"
                 val currentId = Regex("[?&]newdid=(\\d+)", RegexOption.IGNORE_CASE)
                     .find(automationWebView()?.url.orEmpty())?.groupValues?.getOrNull(1).orEmpty()
+                val clicked = result?.optBoolean("clicked", false) == true
                 if (currentId == actualId) {
                     handler.postDelayed({ openSavedBuilderResource() }, 400)
+                } else if (clicked) {
+                    logEvent("Resource Builder: klik village $villageName (ID $actualId) — menunggu halaman village aktif")
+                    handler.postDelayed({
+                        if (running && builderInProgress) {
+                            automationWebView()?.loadUrl(targetUrl)
+                        }
+                    }, 1800)
                 } else {
                     logEvent("Resource Builder: pindah ke $villageName (ID $actualId)")
                     automationWebView()?.loadUrl(targetUrl)

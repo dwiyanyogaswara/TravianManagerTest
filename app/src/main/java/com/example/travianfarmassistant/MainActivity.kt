@@ -1371,7 +1371,12 @@ class MainActivity : Activity() {
                 );
 
                 AndroidFarm.onVillageScanResult(JSON.stringify({
-                    id:expectedId, name:pageName, minLevel:Math.min(...uniqueLevels),
+                    id:expectedId, name:pageName,
+                    // IMPORTANT: minLevel harus berasal dari resource field yang benar-benar
+                    // punya href build.php?id=..., bukan dari node/dekorasi lain di container.
+                    // Kalau tidak, node lain bisa membuat C2 terbaca L2 padahal resource field
+                    // terendah sebenarnya lebih tinggi.
+                    minLevel:lowestResource ? lowestResource.level : -1,
                     fields:uniqueLevels, fieldNodeCount:fieldNodes.length,
                     debugFieldCount:debugFields.length, debugFields,
                     resourceContainer:true, activeId, activeName, url, resources, lowestResource
