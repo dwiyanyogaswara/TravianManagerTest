@@ -442,7 +442,7 @@ class FarmAutomationService : Service() {
         automationWebView()?.loadUrl("$server/build.php?id=39&gid=16&tt=99")
     }
 
-    private fun handlePageAfterConsent(url: String, lower: String, attempt: Int) {
+    private fun handlePageAfterConsent(url: String, lower: String, attempt: Int): Unit {
         debugTrace("ENTER handlePageAfterConsent")
         if (!running) return
         acceptCookiesIfPresent { result ->
@@ -610,7 +610,7 @@ class FarmAutomationService : Service() {
         }
     }
 
-    private fun clickStartAllFarmLists() {
+    private fun clickStartAllFarmLists(): Unit {
         debugTrace("ENTER clickStartAllFarmLists")
         if (!running || !pendingStartAll) return
         val js = """
@@ -738,7 +738,7 @@ class FarmAutomationService : Service() {
         }
     }
 
-    private fun verifyRaidDispatch() {
+    private fun verifyRaidDispatch(): Unit {
         debugTrace("ENTER verifyRaidDispatch")
         if (!running) return
 
@@ -858,7 +858,7 @@ class FarmAutomationService : Service() {
         }
     }
 
-    private fun verifyFallbackRaidCompletion() {
+    private fun verifyFallbackRaidCompletion(): Unit {
         debugTrace("ENTER verifyFallbackRaidCompletion")
         if (!running) return
 
@@ -1016,7 +1016,7 @@ class FarmAutomationService : Service() {
         automationWebView()?.loadUrl("$server/dorf1.php")
     }
 
-    private fun openSavedBuilderResource() {
+    private fun openSavedBuilderResource(): Unit {
         debugTrace("ENTER openSavedBuilderResource")
         if (!running || !builderInProgress || pendingBuilderResourceHref.isBlank()) return
         val (villageId, villageName) = builderVillages.getOrNull(builderVillageIndex)
@@ -1088,7 +1088,7 @@ class FarmAutomationService : Service() {
         }
     }
 
-    private fun clickBuilderVillageFromDorf() {
+    private fun clickBuilderVillageFromDorf(): Unit {
         debugTrace("ENTER clickBuilderVillageFromDorf")
         if (!running || !builderInProgress || !builderVillageClickInProgress) return
         val village = builderVillages.getOrNull(builderVillageIndex) ?: return
@@ -1165,7 +1165,7 @@ class FarmAutomationService : Service() {
         }
     }
 
-    private fun inspectResourceVillage() {
+    private fun inspectResourceVillage(): Unit {
         debugTrace("ENTER inspectResourceVillage")
         if (!running || !builderInProgress) return
         val js = """
@@ -1405,7 +1405,7 @@ class FarmAutomationService : Service() {
         }
     }
 
-    private fun useHeroInventoryForPendingUpgrade() {
+    private fun useHeroInventoryForPendingUpgrade(): Unit {
         debugTrace("ENTER useHeroInventoryForPendingUpgrade")
         if (!running || !builderInProgress || pendingUpgradeUrl.isBlank()) return
         inventoryUseAttempt++
@@ -1483,7 +1483,7 @@ class FarmAutomationService : Service() {
         }
     }
 
-    private fun fillHeroResourceDialog() {
+    private fun fillHeroResourceDialog(): Unit {
         debugTrace("ENTER fillHeroResourceDialog")
         if (!running || !builderInProgress || pendingUpgradeUrl.isBlank()) return
         val needed = pendingUpgradeCosts.joinToString(",")
