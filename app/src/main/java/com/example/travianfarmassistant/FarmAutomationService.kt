@@ -564,8 +564,8 @@ class FarmAutomationService : Service() {
                             return JSON.stringify({ok: currentId === expected, currentId, activeId, urlId});
                         })();
                     """.trimIndent()) { raw ->
-                        val result = raw.orEmpty().trim('"').replace("\"", """)
-                        val currentId = Regex("\"currentId\":\"(\d*)\"").find(result)
+                        val result = raw.orEmpty().trim('"').replace("\\\"", "\"")
+                        val currentId = Regex("\"currentId\":\"(\\d*)\"").find(result)
                             ?.groupValues?.getOrNull(1).orEmpty()
                         if (result.contains("\"ok\":true")) {
                             if (builderStage != "OPEN_RESOURCE" && builderStage != "WAIT_UPGRADE" && builderStage != "ADVANCING") {
