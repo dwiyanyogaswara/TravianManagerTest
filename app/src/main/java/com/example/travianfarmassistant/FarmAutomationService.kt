@@ -468,7 +468,7 @@ class FarmAutomationService : Service() {
 
             if (builderInProgress && lower.contains("dorf1.php")) {
                 val expectedId = builderVillages.getOrNull(builderVillageIndex)?.first.orEmpty()
-                val currentId = Regex("[?&]newdid=(\\d+)", RegexOption.IGNORE_CASE)
+                val currentId = Regex("[?&]newdid=([0-9]+)", RegexOption.IGNORE_CASE)
                     .find(lower)?.groupValues?.getOrNull(1).orEmpty()
 
                 if (builderVillages.isEmpty()) {
@@ -689,8 +689,8 @@ class FarmAutomationService : Service() {
                 farmListLastState = ""
                 farmListStableChecks = 0
                 fallbackFarmListMode = false
-                raidCountBeforeStartAll = Regex("\"before\":(\\d+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-                farmListBeforeReady = Regex("\"readyBefore\":(\\d+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                raidCountBeforeStartAll = Regex("\"before\":([0-9]+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                farmListBeforeReady = Regex("\"readyBefore\":([0-9]+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
                 val now = timeFormat.format(Date())
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("last_run", now).apply()
                 logEvent("Send All Farm Lists diklik; raid aktif sebelum klik=$raidCountBeforeStartAll; tombol Farm List siap sebelum klik=$farmListBeforeReady")
@@ -772,10 +772,10 @@ class FarmAutomationService : Service() {
 
         automationWebView()?.evaluateJavascript(js) { raw ->
             val result = raw.orEmpty().trim('"').replace("\\\"", "\"")
-            val current = Regex("\"total\":(\\d+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-            val ready = Regex("\"ready\":(\\d+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val current = Regex("\"total\":([0-9]+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val ready = Regex("\"ready\":([0-9]+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
             val busy = Regex("\"busy\":(true|false)").find(result)?.groupValues?.get(1) == "true"
-            val wrappers = Regex("\"wrappers\":(\\d+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val wrappers = Regex("\"wrappers\":([0-9]+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
             if (current > raidCountBeforeStartAll || ready < farmListBeforeReady || busy) {
                 farmListProgressObserved = true
@@ -845,8 +845,8 @@ class FarmAutomationService : Service() {
         """.trimIndent()
         automationWebView()?.evaluateJavascript(js) { raw ->
             val result = raw.orEmpty().trim('"').replace("\\\"", "\"")
-            val clicked = Regex("\"clicked\":(\\d+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-                farmListBeforeReady = Regex("\"readyBefore\":(\\d+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val clicked = Regex("\"clicked\":([0-9]+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                farmListBeforeReady = Regex("\"readyBefore\":([0-9]+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
             farmListProgressObserved = false
             farmListLastState = ""
             farmListStableChecks = 0
@@ -882,8 +882,8 @@ class FarmAutomationService : Service() {
 
         automationWebView()?.evaluateJavascript(js) { raw ->
             val result = raw.orEmpty().trim('"').replace("\\\"", "\"")
-            val current = Regex("\"total\":(\\d+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-            val wrappers = Regex("\"wrappers\":(\\d+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val current = Regex("\"total\":([0-9]+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val wrappers = Regex("\"wrappers\":([0-9]+)").find(result)?.groupValues?.get(1)?.toIntOrNull() ?: 0
             val busy = Regex("\"busy\":(true|false)").find(result)?.groupValues?.get(1) == "true"
 
             raidVerificationAttempt++
@@ -1235,8 +1235,8 @@ class FarmAutomationService : Service() {
                     goToNextBuilderVillage()
                 }
                 result.contains("candidate") -> {
-                    val idMatch = Regex("\\\"id\\\":\\\"?(\\d+)").find(result)
-                    val levelMatch = Regex("\\\"level\\\":(\\d+)").find(result)
+                    val idMatch = Regex("\\\"id\\\":\\\"?([0-9]+)").find(result)
+                    val levelMatch = Regex("\\\"level\\\":([0-9]+)").find(result)
                     val id = idMatch?.groupValues?.get(1)
                     val level = levelMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
                     if (id == null) {
