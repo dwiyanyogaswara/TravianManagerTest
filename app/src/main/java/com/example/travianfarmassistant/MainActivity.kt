@@ -71,6 +71,107 @@ class MainActivity : Activity() {
     private lateinit var villageChecklist: LinearLayout
     private var loadedVillages = linkedMapOf<String, String>()
 
+    // Single source of truth untuk data village hasil REFRESH VILLAGE.
+    // Disimpan sebagai JSON array di SharedPreferences agar dapat dipakai
+    // kembali oleh Resource Builder tanpa scan/discovery ulang.
+    private val villageDataPrefsKey = "village_data_json"
+
+    private data class VillageDataRecord(
+        val isChecklist: Boolean,
+        val namaVillage: String,
+        val id: String,
+        val linkVillage: String,
+        val linkResource: String,
+        val minLvl: Int
+    )
+
+    private fun loadVillageDataRecords(): MutableList<VillageDataRecord> {
+        debugTrace("ENTER loadVillageDataRecords")
+        val raw = getSharedPreferences("config", MODE_PRIVATE)
+            .getString(villageDataPrefsKey, "[]").orEmpty()
+        val array = runCatching { org.json.JSONArray(raw) }.getOrNull() ?: org.json.JSONArray()
+        val out = mutableListOf<VillageDataRecord>()
+        val seen = mutableSetOf<String>()
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: continue
+            val id = item.optString("Id").trim()
+            if (id.isBlank() || !seen.add(id)) continue
+            out.add(
+                VillageDataRecord(
+                    isChecklist = item.optBoolean("IsChecklist", false),
+                    namaVillage = item.optString("NamaVillage").trim().ifBlank { "Village $id" },
+                    id = id,
+                    linkVillage = item.optString("LinkVillage").trim(),
+                    linkResource = item.optString("LinkResource").trim(),
+                    minLvl = item.optInt("MinLvl", -1)
+                )
+            )
+        }
+        return out
+    }
+
+    private fun saveVillageDataRecords(records: List<VillageDataRecord>) {
+        debugTrace("ENTER saveVillageDataRecords")
+        val array = org.json.JSONArray()
+        records.distinctBy { it.id }.forEach { item ->
+            array.put(JSONObject().apply {
+                put("IsChecklist", item.isChecklist)
+                put("NamaVillage", item.namaVillage)
+                put("Id", item.id)
+                put("LinkVillage", item.linkVillage)
+                put("LinkResource", item.linkResource)
+                put("MinLvl", item.minLvl)
+            })
+        }
+        getSharedPreferences("config", MODE_PRIVATE).edit()
+            .putString(villageDataPrefsKey, array.toString())
+            .apply()
+    }
+
+    private fun upsertVillageDataRecord(
+        id: String,
+        namaVillage: String,
+        linkVillage: String? = null,
+        linkResource: String? = null,
+        minLvl: Int? = null,
+        isChecklist: Boolean? = null
+    ) {
+        debugTrace("ENTER upsertVillageDataRecord")
+        val cleanId = id.trim()
+        if (cleanId.isBlank()) return
+        val records = loadVillageDataRecords()
+        val index = records.indexOfFirst { it.id == cleanId }
+        val old = records.getOrNull(index)
+        val updated = VillageDataRecord(
+            isChecklist = isChecklist ?: old?.isChecklist ?: false,
+            namaVillage = namaVillage.trim().ifBlank { old?.namaVillage ?: "Village $cleanId" },
+            id = cleanId,
+            linkVillage = linkVillage?.trim()?.takeIf { it.isNotBlank() } ?: old?.linkVillage.orEmpty(),
+            linkResource = linkResource?.trim()?.takeIf { it.isNotBlank() } ?: old?.linkResource.orEmpty(),
+            minLvl = minLvl ?: old?.minLvl ?: -1
+        )
+        if (index >= 0) records[index] = updated else records.add(updated)
+        saveVillageDataRecords(records)
+    }
+
+    private fun updateVillageChecklistData(id: String, checked: Boolean) {
+        debugTrace("ENTER updateVillageChecklistData")
+        val cleanId = id.trim()
+        if (cleanId.isBlank()) return
+        val records = loadVillageDataRecords()
+        val index = records.indexOfFirst { it.id == cleanId }
+        if (index < 0) return
+        records[index] = records[index].copy(isChecklist = checked)
+        saveVillageDataRecords(records)
+    }
+
+    private fun resetVillageResourceDataForRefresh() {
+        debugTrace("ENTER resetVillageResourceDataForRefresh")
+        val records = loadVillageDataRecords()
+        if (records.isEmpty()) return
+        saveVillageDataRecords(records.map { it.copy(linkResource = "", minLvl = -1) })
+    }
+
     private data class ResourceSnapshot(
         val villageId: String,
         val villageName: String,
@@ -410,6 +511,13 @@ class MainActivity : Activity() {
             return false
         }
 
+        // Sinkronkan IsChecklist di database village menjadi sumber data Builder.
+        val selectedNow = selectedVillageIds()
+        val currentVillageRecords = loadVillageDataRecords()
+        if (currentVillageRecords.isNotEmpty()) {
+            saveVillageDataRecords(currentVillageRecords.map { it.copy(isChecklist = selectedNow.contains(it.id)) })
+        }
+
         getSharedPreferences("config", MODE_PRIVATE).edit()
             .putString("server", server)
             .putString("username", user)
@@ -619,8 +727,12 @@ class MainActivity : Activity() {
     private fun renderVillageChecklist(villages: List<Pair<String, String>>) {
         debugTrace("ENTER renderVillageChecklist")
         val prefs = getSharedPreferences("config", MODE_PRIVATE)
-        val saved = prefs.getStringSet("resource_builder_selected_villages", emptySet()) ?: emptySet()
-        val configured = prefs.getBoolean("resource_builder_selection_configured", false)
+        val villageRecords = loadVillageDataRecords().associateBy { it.id }
+        val saved = villageRecords.filterValues { it.isChecklist }.keys
+        // Kehadiran record village berarti checklist sudah pernah dimuat.
+        // Jangan memakai "ada yang dicentang" sebagai configured karena kondisi
+        // semua unchecked akan salah dianggap belum dikonfigurasi.
+        val configured = villageRecords.isNotEmpty()
 
         loadedVillages.clear()
         villages.distinctBy { it.first }.forEach { (id, name) ->
@@ -654,8 +766,14 @@ class MainActivity : Activity() {
             isChecked = if (configured) loadedVillages.keys.all { saved.contains(it) } else true
             setOnCheckedChangeListener { _, checked ->
                 for (i in 1 until villageChecklist.childCount) {
-                    (villageChecklist.getChildAt(i) as? CheckBox)?.isChecked = checked
+                    val box = villageChecklist.getChildAt(i) as? CheckBox ?: continue
+                    box.isChecked = checked
+                    box.tag?.toString()?.let { updateVillageChecklistData(it, checked) }
                 }
+                getSharedPreferences("config", MODE_PRIVATE).edit()
+                    .putBoolean("resource_builder_selection_configured", true)
+                    .putStringSet("resource_builder_selected_villages", selectedVillageIds())
+                    .apply()
             }
         }
         selectAll.isEnabled = !selectionControlsLocked
@@ -667,8 +785,9 @@ class MainActivity : Activity() {
                 tag = id
                 isEnabled = !selectionControlsLocked
                 isChecked = if (configured) saved.contains(id) else true
-                setOnCheckedChangeListener { _, _ ->
-                    // Simpan segera agar pilihan tidak hilang ketika Activity ditutup.
+                setOnCheckedChangeListener { _, checked ->
+                    updateVillageChecklistData(id, checked)
+                    // Legacy prefs tetap disimpan agar versi lama tetap kompatibel.
                     getSharedPreferences("config", MODE_PRIVATE).edit()
                         .putBoolean("resource_builder_selection_configured", true)
                         .putStringSet("resource_builder_selected_villages", selectedVillageIds())
@@ -858,6 +977,7 @@ class MainActivity : Activity() {
         villageScanCollectedTargets.clear()
         villageScanCollectedLinks.clear()
         villageScanCollectInFlight = false
+        resetVillageResourceDataForRefresh()
         clearSavedResourceBuilderTargets()
 
         farmStatus.text = "Refresh village: membaca daftar village..."
@@ -994,6 +1114,11 @@ class MainActivity : Activity() {
                 if (id.isNotBlank()) {
                     targets.add(id to name)
                     if (href.isNotBlank()) villageScanCollectedLinks[id] = href
+                    upsertVillageDataRecord(
+                        id = id,
+                        namaVillage = name,
+                        linkVillage = href.takeIf { it.isNotBlank() }
+                    )
                 }
             }
         }
@@ -1450,6 +1575,16 @@ class MainActivity : Activity() {
         val lowestResourceLevel = lowestResource?.optInt("level", -1) ?: -1
         val lowestResourceId = lowestResource?.optString("fieldId", "").orEmpty()
         val lowestResourceHref = lowestResource?.optString("href", "").orEmpty()
+        val scannedVillageLink = villageScanCollectedLinks[id].orEmpty()
+        val existingRecord = loadVillageDataRecords().firstOrNull { it.id == id }
+        upsertVillageDataRecord(
+            id = id,
+            namaVillage = name,
+            linkVillage = scannedVillageLink,
+            linkResource = lowestResourceHref.takeIf { it.isNotBlank() },
+            minLvl = minLevel,
+            isChecklist = existingRecord?.isChecklist
+        )
 
         villageMinLevels[id] = minLevel
         if (lowestResourceLevel >= 0 && lowestResourceId.isNotBlank()) {
@@ -1568,6 +1703,13 @@ class MainActivity : Activity() {
         )
 
         renderVillageChecklist(merged)
+
+        // Buang record village lama yang sudah tidak ada pada hasil refresh terbaru.
+        val currentIds = merged.map { it.first }.toSet()
+        val currentRecords = loadVillageDataRecords()
+        if (currentRecords.isNotEmpty()) {
+            saveVillageDataRecords(currentRecords.filter { currentIds.contains(it.id) })
+        }
         villageScanTargets.clear()
     }
 
@@ -2328,6 +2470,7 @@ class MainActivity : Activity() {
                         offset += line.length + 1
                     }
                     recentLogs.text = spannable
+                recentLogs.setTextIsSelectable(true)
                 } catch (_: Exception) {
                     // Preview must never interrupt automation.
                 }
@@ -2439,6 +2582,11 @@ class MainActivity : Activity() {
                 refreshRecentLogs()
             }
         }
+        val copy = Button(this).apply {
+            text = "SALIN SEMUA"
+            layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = 8 }
+            setOnClickListener { copyAllActivityLog() }
+        }
         val clear = Button(this).apply {
             text = "HAPUS"
             layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
@@ -2452,10 +2600,32 @@ class MainActivity : Activity() {
             }
         }
         row.addView(refresh)
+        row.addView(copy)
         row.addView(clear)
         wrapper.addView(row)
         wrapper.addView(logOverview, LinearLayout.LayoutParams(-1, -2))
         parent.addView(wrapper, index)
+    }
+
+    private fun copyAllActivityLog() {
+        logIoExecutor.execute {
+            val text = runCatching {
+                val file = getFileStreamPath(logFileName)
+                if (file.exists()) file.readText() else ""
+            }.getOrDefault("")
+            handler.post {
+                if (isFinishing) return@post
+                val clipboard = getSystemService(android.content.ClipboardManager::class.java)
+                clipboard?.setPrimaryClip(
+                    android.content.ClipData.newPlainText("Travian Farm Assistant log", text)
+                )
+                Toast.makeText(
+                    this@MainActivity,
+                    if (text.isBlank()) "Log kosong" else "Semua log berhasil disalin",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
     }
 
     private fun clearActivityLog() {
@@ -2569,7 +2739,7 @@ class MainActivity : Activity() {
                 logOverview.text = if (lines.isEmpty()) {
                     "Belum ada log."
                 } else {
-                    buildColoredLog(lines.asReversed())
+                    buildColoredLog(lines.asReversed()).also { logOverview.setTextIsSelectable(true) }
                 }
             }
         }

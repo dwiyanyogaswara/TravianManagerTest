@@ -144,6 +144,70 @@ class FarmAutomationService : Service() {
         scheduleNextRandomRun()
         updateNotification("Siklus dihentikan oleh watchdog 5 menit")
     }
+    private data class VillageDataRecord(
+        val isChecklist: Boolean,
+        val namaVillage: String,
+        val id: String,
+        val linkVillage: String,
+        val linkResource: String,
+        val minLvl: Int
+    )
+
+    private fun loadVillageDataRecordsFromPrefs(): List<VillageDataRecord> {
+        debugTrace("ENTER loadVillageDataRecordsFromPrefs")
+        val raw = getSharedPreferences(PREFS, MODE_PRIVATE)
+            .getString("village_data_json", "[]").orEmpty()
+        val array = runCatching { org.json.JSONArray(raw) }.getOrNull() ?: return emptyList()
+        val out = mutableListOf<VillageDataRecord>()
+        val seen = mutableSetOf<String>()
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: continue
+            val id = item.optString("Id").trim()
+            if (id.isBlank() || !seen.add(id)) continue
+            out.add(
+                VillageDataRecord(
+                    isChecklist = item.optBoolean("IsChecklist", false),
+                    namaVillage = item.optString("NamaVillage").trim().ifBlank { "Village $id" },
+                    id = id,
+                    linkVillage = item.optString("LinkVillage").trim(),
+                    linkResource = item.optString("LinkResource").trim(),
+                    minLvl = item.optInt("MinLvl", -1)
+                )
+            )
+        }
+        return out
+    }
+
+    private fun loadBuilderStateFromVillageData(): Boolean {
+        debugTrace("ENTER loadBuilderStateFromVillageData")
+        val records = loadVillageDataRecordsFromPrefs()
+        builderVillages.clear()
+        builderVillageLinks.clear()
+        builderResourceLinks.clear()
+        builderResourceLevels.clear()
+
+        val selected = records.filter { it.isChecklist }
+        for (record in selected) {
+            builderVillages.add(record.id to record.namaVillage)
+            if (record.linkVillage.isNotBlank()) builderVillageLinks[record.id] = record.linkVillage
+            if (record.linkResource.isNotBlank()) builderResourceLinks[record.id] = record.linkResource
+            if (record.minLvl >= 0) builderResourceLevels[record.id] = record.minLvl
+        }
+
+        logEvent(
+            "Resource Builder: database village dimuat — total=${records.size}, " +
+                "checklist=${selected.size}, resourceLink=${builderResourceLinks.size}"
+        )
+        selected.forEach { record ->
+            logEvent(
+                "Resource Builder DB: ${record.namaVillage} [${record.id}] " +
+                    "check=${record.isChecklist}; village=${record.linkVillage.ifBlank { "-" }}; " +
+                    "resource=${record.linkResource.ifBlank { "-" }}; min=L${record.minLvl}"
+            )
+        }
+        return selected.isNotEmpty()
+    }
+
     private var resourceBuilderEnabled = true
     private var farmListEnabled = true
     private var builderSelectionConfigured = false
@@ -947,9 +1011,9 @@ class FarmAutomationService : Service() {
         // ketika BOT dinyalakan. Discovery ulang sebelumnya menyebabkan builder
         // menunggu retry berkali-kali (bahkan sampai 10x) karena sidebar tidak selalu
         // merender semua village.
-        builderVillages = loadBuilderVillagesFromSnapshot()
-        if (builderVillages.isEmpty()) {
-            logEvent("Resource Builder: tidak ada village terpilih dari snapshot; siklus dilewati")
+        val hasVillageData = loadBuilderStateFromVillageData()
+        if (!hasVillageData) {
+            logEvent("Resource Builder: database village tidak memiliki checklist aktif; siklus dilewati")
             finishResourceBuilderCycle()
             return
         }
@@ -1142,6 +1206,20 @@ class FarmAutomationService : Service() {
                 if (anchor) {
                     anchor.scrollIntoView({block:'center', inline:'nearest'});
                     anchor.click();
+                    // Link village Travian sering membuka build.php?id=39 (Rally Point)
+                    // sambil mengganti context village. Builder harus kembali ke dorf1.php
+                    // agar tahap berikutnya bisa memverifikasi village lalu membuka target
+                    // resource tersimpan. Ini mengikuti mekanisme Refresh Village.
+                    setTimeout(() => {
+                        const current = location.href.match(/[?&]newdid=(\d+)/i)?.[1] || '';
+                        const active = document.querySelector(
+                            '#sidebarBoxVillagelist .listEntry.active, .villageList .listEntry.active'
+                        )?.getAttribute('data-did') || '';
+                        AndroidFarm.onLiveClickResult(JSON.stringify({
+                            kind:'AUTO_VILLAGE_CLICK_VERIFY', id, current, active, pageUrl:location.href
+                        }));
+                        location.href = '/dorf1.php?newdid=' + encodeURIComponent(id);
+                    }, 2200);
                     return 'clicked';
                 }
 
