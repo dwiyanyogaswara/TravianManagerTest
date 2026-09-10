@@ -696,11 +696,17 @@ class MainActivity : Activity() {
     private fun villageSelectionJson(): String {
         debugTrace("ENTER villageSelectionJson")
         val selected = selectedVillageIds()
+        val recordsById = loadVillageDataRecords().associateBy { it.id }
+        val server = normalizeServer(serverInput.text.toString())
         val array = org.json.JSONArray()
         loadedVillages.forEach { (id, name) ->
             if (selected.contains(id)) {
-                array.put(JSONObject().apply { put("id", id); put("name", name)
-                    put("href", villageScanCollectedLinks[id].orEmpty())
+                val savedLink = recordsById[id]?.linkVillage.orEmpty()
+                val canonicalLink = savedLink.ifBlank { "$server/dorf1.php?newdid=$id" }
+                array.put(JSONObject().apply {
+                    put("id", id)
+                    put("name", name)
+                    put("href", canonicalLink)
                 })
             }
         }
@@ -1033,8 +1039,11 @@ class MainActivity : Activity() {
                         anchor?.getAttribute('data-did') || '';
                     const href = anchor?.getAttribute('href') || '';
                     const hrefDid = href.match(/[?&]newdid=(\d+)/i)?.[1] || '';
-                    const id = /^\d+$/.test(dataDid) ? dataDid : hrefDid;
+                    // Jika href mengandung newdid, itu adalah ID village yang paling spesifik.
+                    // Beberapa layout Travian menaruh data-did stale/berbeda pada wrapper.
+                    const id = /^\d+$/.test(hrefDid) ? hrefDid : dataDid;
                     if (!/^\d+$/.test(id) || seen.has(id)) continue;
+                    const villageLink = '/dorf1.php?newdid=' + encodeURIComponent(id);
                     let name = clean(
                         entry.querySelector('.name')?.textContent ||
                         anchor?.getAttribute('title') ||
@@ -1044,7 +1053,7 @@ class MainActivity : Activity() {
                     name = name.replace(/\(\s*[−-]?\d+\s*\|\s*[−-]?\d+\s*\)/g, '').trim();
                     if (!name) name = 'Village ' + id;
                     seen.add(id);
-                    out.push({ id, name, href, tag:anchor?.tagName || entry.tagName || '',
+                    out.push({ id, name, href:villageLink, tag:anchor?.tagName || entry.tagName || '',
                         idAttr:anchor?.id || entry.id || '',
                         className:clean(entry.className || '').slice(0,100),
                         matchSource:'sidebar-dropContainer' });
@@ -1063,8 +1072,11 @@ class MainActivity : Activity() {
                         entry?.getAttribute('data-did') || '';
                     const hrefDid = href.match(/[?&]newdid=(\d+)/i)?.[1] || '';
                     if (/^\s*\/?build\.php(?:[?&]|$)/i.test(href)) continue;
-                    const id = /^\d+$/.test(dataDid) ? dataDid : hrefDid;
+                    // Jika href mengandung newdid, itu adalah ID village yang paling spesifik.
+                    // Beberapa layout Travian menaruh data-did stale/berbeda pada wrapper.
+                    const id = /^\d+$/.test(hrefDid) ? hrefDid : dataDid;
                     if (!/^\d+$/.test(id) || seen.has(id)) continue;
+                    const villageLink = '/dorf1.php?newdid=' + encodeURIComponent(id);
                     let name = clean(
                         entry?.querySelector('.name')?.textContent ||
                         anchor.getAttribute('title') || anchor.getAttribute('aria-label') ||
@@ -1073,7 +1085,7 @@ class MainActivity : Activity() {
                     name = name.replace(/\(\s*[−-]?\d+\s*\|\s*[−-]?\d+\s*\)/g, '').trim();
                     if (!name) name = 'Village ' + id;
                     seen.add(id);
-                    out.push({id, name, href, tag:anchor.tagName || '', idAttr:anchor.id || '',
+                    out.push({id, name, href:villageLink, tag:anchor.tagName || '', idAttr:anchor.id || '',
                         className:clean(anchor.className || '').slice(0,100), matchSource:dataDid ? 'data-did' : 'href'});
                 }
 
@@ -1112,12 +1124,13 @@ class MainActivity : Activity() {
                 val name = item.optString("name").trim().ifBlank { "Village $id" }
                 val href = item.optString("href").trim()
                 if (id.isNotBlank()) {
+                    val canonicalLink = "${normalizeServer(serverInput.text.toString())}/dorf1.php?newdid=$id"
                     targets.add(id to name)
-                    if (href.isNotBlank()) villageScanCollectedLinks[id] = href
+                    villageScanCollectedLinks[id] = canonicalLink
                     upsertVillageDataRecord(
                         id = id,
                         namaVillage = name,
-                        linkVillage = href.takeIf { it.isNotBlank() }
+                        linkVillage = canonicalLink
                     )
                 }
             }
@@ -2439,6 +2452,7 @@ class MainActivity : Activity() {
     private fun refreshRecentLogs() {
         updateVillageLinkPreviews()
         if (!::recentLogs.isInitialized || isFinishing) return
+        recentLogs.setTextIsSelectable(true)
         logIoExecutor.execute {
             val lines = readLastLogLines(5, 32768)
             handler.post {
@@ -2729,6 +2743,7 @@ class MainActivity : Activity() {
 
     private fun refreshLogOverview() {
         if (!::logOverview.isInitialized || isFinishing) return
+        logOverview.setTextIsSelectable(true)
         val requestId = ++logOverviewRequestId
         logOverview.text = "Memuat log..."
 
