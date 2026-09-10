@@ -1208,7 +1208,7 @@ class FarmAutomationService : Service() {
                     builderVillages[builderVillageIndex] = actualId to villageName
                 }
                 val targetUrl = "$server/dorf1.php?newdid=$actualId"
-                val currentId = Regex("[?&]newdid=(\d+)", RegexOption.IGNORE_CASE)
+                val currentId = Regex("[?&]newdid=(\\d+)", RegexOption.IGNORE_CASE)
                     .find(automationWebView()?.url.orEmpty())?.groupValues?.getOrNull(1).orEmpty()
                 if (currentId == actualId) {
                     handler.postDelayed({ openSavedBuilderResource() }, 400)
