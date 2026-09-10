@@ -1088,10 +1088,19 @@ class FarmAutomationService : Service() {
         }
     }
 
+    private fun saveDebugResourceBuilderVillageLink(villageId: String) {
+        val prefs = overridePrefs ?: getSharedPreferences(PREFS, MODE_PRIVATE)
+        val targetUrl = "$server/dorf1.php?newdid=$villageId"
+        prefs.edit()
+            .putString("debug_last_resource_builder_village_link", targetUrl)
+            .apply()
+    }
+
     private fun clickBuilderVillageFromDorf(): Unit {
         debugTrace("ENTER clickBuilderVillageFromDorf")
         if (!running || !builderInProgress || !builderVillageClickInProgress) return
         val village = builderVillages.getOrNull(builderVillageIndex) ?: return
+        saveDebugResourceBuilderVillageLink(village.first)
         val savedVillageHref = builderVillageLinks[village.first].orEmpty().trim()
         val idJson = JSONObject.quote(village.first)
         val nameJson = JSONObject.quote(village.second)

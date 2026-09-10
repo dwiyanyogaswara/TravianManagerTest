@@ -34,28 +34,6 @@ import java.util.Locale
 import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
-    companion object {
-        private var instanceRef: java.lang.ref.WeakReference<MainActivity>? = null
-
-        fun requestVillageRefreshFromService(): Boolean {
-            val activity = instanceRef?.get() ?: return false
-            activity.runOnUiThread {
-                if (!activity.isFinishing) {
-                    activity.logEvent("AUTO: REFRESH VILLAGE dijalankan 1 menit setelah Next Run")
-                    activity.villageScanActive = false
-                    activity.villageScanTargets.clear()
-                    activity.villageScanResults.clear()
-                    activity.villageScanIndex = 0
-                    activity.villageScanExpected = 0
-                    activity.villageScanRetry = 0
-                    activity.villageScanPageRetry = 0
-                    activity.villageScanDataRetry = 0
-                    activity.refreshVillagesForUi()
-                }
-            }
-            return true
-        }
-    }
     private lateinit var webView: WebView
     private lateinit var farmStatus: TextView
     private lateinit var status: TextView
@@ -66,6 +44,8 @@ class MainActivity : Activity() {
     private lateinit var serverInput: EditText
     private lateinit var usernameInput: EditText
     private lateinit var passwordInput: EditText
+    private lateinit var refreshVillageLinkPreview: TextView
+    private lateinit var resourceBuilderVillageLinkPreview: TextView
     private lateinit var villageChecklist: LinearLayout
     private var loadedVillages = linkedMapOf<String, String>()
 
@@ -124,6 +104,7 @@ class MainActivity : Activity() {
     private var villageScanIndex = 0
     private var villageScanResults = mutableListOf<Pair<String, String>>()
     private val villageMinLevels = mutableMapOf<String, Int>()
+    private val villageMinResourceDetails = mutableMapOf<String, Pair<String, String>>()
     private var villageScanExpected = 0
     private var villageScanRetry = 0
     private var villageScanPageRetry = 0
@@ -174,7 +155,6 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         debugTrace("ENTER onCreate")
         super.onCreate(savedInstanceState)
-        instanceRef = java.lang.ref.WeakReference(this)
         setContentView(R.layout.activity_main)
 
         farmTab = findViewById(R.id.farmTab)
@@ -196,6 +176,9 @@ class MainActivity : Activity() {
         usernameInput = findViewById(R.id.username)
         passwordInput = findViewById(R.id.password)
         farmStatus = findViewById(R.id.farmListStatus)
+        refreshVillageLinkPreview = findViewById(R.id.refreshVillageLinkPreview)
+        resourceBuilderVillageLinkPreview = findViewById(R.id.resourceBuilderVillageLinkPreview)
+        updateVillageLinkPreviews()
         status = findViewById(R.id.status)
         lastRun = findViewById(R.id.lastRun)
         nextRun = findViewById(R.id.nextRun)
@@ -621,10 +604,15 @@ class MainActivity : Activity() {
             if (id.isNotBlank()) {
                 val villageName = name.ifBlank { "Village $id" }
                 val minLevel = villageMinLevels[id]
+                val resourceDetail = villageMinResourceDetails[id]
                 loadedVillages[id] = if (minLevel != null && minLevel >= 0) {
-                    "$villageName - lvl $minLevel"
+                    if (resourceDetail != null) {
+                        "$villageName - Lvl $minLevel ${resourceDetail.first} ${resourceDetail.second}"
+                    } else {
+                        "$villageName - Lvl $minLevel"
+                    }
                 } else {
-                    "$villageName - lvl ?"
+                    "$villageName - Lvl ?"
                 }
             }
         }
@@ -837,6 +825,7 @@ class MainActivity : Activity() {
         villageScanTargets.clear()
         villageScanResults.clear()
         villageMinLevels.clear()
+        villageMinResourceDetails.clear()
         villageScanIndex = 0
         villageScanExpected = 0
         villageScanRetry = 0
@@ -1039,6 +1028,7 @@ class MainActivity : Activity() {
         villageScanTargets = discovered.toMutableList()
         villageScanResults.clear()
         villageMinLevels.clear()
+        villageMinResourceDetails.clear()
         villageScanIndex = 0
         villageScanRetry = 0
         villageScanDataRetry = 0
@@ -1063,6 +1053,14 @@ class MainActivity : Activity() {
 
         val (id, name) = villageScanTargets[villageScanIndex]
         val progress = "${villageScanIndex + 1}/${villageScanTargets.size}"
+
+        // Simpan URL tujuan pindah village untuk ditampilkan tepat di bawah tombol LOGIN.
+        val refreshVillageTargetUrl =
+            "${normalizeServer(serverInput.text.toString())}/dorf1.php?newdid=$id"
+        getSharedPreferences("config", MODE_PRIVATE).edit()
+            .putString("debug_last_refresh_village_link", refreshVillageTargetUrl)
+            .apply()
+        updateVillageLinkPreviews()
 
         farmStatus.text = "Village $progress — $name"
         logEvent("UI: [$progress] target village: $name (ID $id)")
@@ -1431,6 +1429,18 @@ class MainActivity : Activity() {
         val lowestResourceHref = lowestResource?.optString("href", "").orEmpty()
 
         villageMinLevels[id] = minLevel
+        if (lowestResourceLevel >= 0 && lowestResourceId.isNotBlank()) {
+            val resourceType = when (lowestResourceId.toIntOrNull()) {
+                in 1..4 -> "Wood"
+                in 5..8 -> "Clay"
+                in 9..12 -> "Iron"
+                in 13..18 -> "Crop"
+                else -> "Resource"
+            }
+            villageMinResourceDetails[id] = resourceType to "id$lowestResourceId"
+        } else {
+            villageMinResourceDetails.remove(id)
+        }
 
         val progress = "${villageScanIndex + 1}/${villageScanTargets.size}"
 
@@ -2247,7 +2257,22 @@ class MainActivity : Activity() {
         }, 250L)
     }
 
+    private fun updateVillageLinkPreviews() {
+        if (!::refreshVillageLinkPreview.isInitialized ||
+            !::resourceBuilderVillageLinkPreview.isInitialized) return
+
+        val prefs = getSharedPreferences("config", MODE_PRIVATE)
+        val refreshLink = prefs.getString("debug_last_refresh_village_link", "").orEmpty()
+        val builderLink = prefs.getString("debug_last_resource_builder_village_link", "").orEmpty()
+
+        refreshVillageLinkPreview.text =
+            "REFRESH VILLAGE LINK: ${if (refreshLink.isBlank()) "-" else refreshLink}"
+        resourceBuilderVillageLinkPreview.text =
+            "RES BUILDER LINK: ${if (builderLink.isBlank()) "-" else builderLink}"
+    }
+
     private fun refreshRecentLogs() {
+        updateVillageLinkPreviews()
         if (!::recentLogs.isInitialized || isFinishing) return
         logIoExecutor.execute {
             val lines = readLastLogLines(5, 32768)
@@ -2609,7 +2634,6 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        if (instanceRef?.get() === this) instanceRef = null
         debugTrace("ENTER onDestroy")
         villageScanActive = false
         villageScanTargets.clear()
