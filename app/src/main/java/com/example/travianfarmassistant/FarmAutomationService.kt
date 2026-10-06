@@ -3106,6 +3106,7 @@ private fun clickTransferSelected() {
                                             pendingUpgradeCosts = longArrayOf(0L, 0L, 0L, 0L)
                                             heroTransferCompleted = false
                                             builderStage = "TOWN_ADVANCING"
+                                            logEvent("Town Builder: $name upgrade faster success")
                                             advanceTownBuilderVillage()
                                         }, 5_000L)
                                     }
@@ -3116,6 +3117,7 @@ private fun clickTransferSelected() {
                                         pendingUpgradeCosts = longArrayOf(0L, 0L, 0L, 0L)
                                         heroTransferCompleted = false
                                         builderStage = "TOWN_ADVANCING"
+                                        logEvent("Town Builder: $name video not found")
                                         advanceTownBuilderVillage()
                                     }
                                     else -> handler.postDelayed(this, 500L)
@@ -3371,6 +3373,7 @@ private fun clickTransferSelected() {
                                             pendingUpgradeUrl = ""
                                             pendingUpgradeCosts = longArrayOf(0L, 0L, 0L, 0L)
                                             heroTransferCompleted = false
+                                            logEvent("Resource Builder: $name upgrade faster success")
                                             goToNextBuilderVillage()
                                         }, 5_000L)
                                     }
@@ -3381,6 +3384,7 @@ private fun clickTransferSelected() {
                                         pendingUpgradeCosts = longArrayOf(0L, 0L, 0L, 0L)
                                         heroTransferCompleted = false
                                         builderStage = "ADVANCING"
+                                        logEvent("Resource Builder: $name video not found")
                                         goToNextBuilderVillage()
                                     }
                                     else -> handler.postDelayed(this, 500L)
@@ -4026,6 +4030,8 @@ private fun clickTransferSelected() {
                     val village = message.removePrefix("Village ").removeSuffix(" no upgrade")
                     "Town Builder - Village $village no upgrade"
                 }
+                message.startsWith("Town Builder:") && message.endsWith("faster success") -> message 
+                message.startsWith("Town Builder:") && message.endsWith("video not found") -> message 
                 else -> return
             }
         } else {
@@ -4045,6 +4051,8 @@ private fun clickTransferSelected() {
                 message == "REFRESH VILLAGE END" -> "REFRESH VILLAGE END"
                 message == "BOT ON" -> "BOT ON"
                 message == "BOT OFF" -> "BOT OFF"
+                message.startsWith("Resource Builder:") && message.endsWith("faster success") -> message 
+                message.startsWith("Resource Builder:") && message.endsWith("video not found") -> message 
                 else -> return
             }
         }
