@@ -93,7 +93,7 @@ class LogActivity : Activity() {
                 logView.text = "Belum ada log."
                 return
             }
-            val lines = file.readLines()
+            val lines = file.readLines().filter { isAllowedLogLine(it) }
             logView.text = if (lines.isEmpty()) "Belum ada log." else buildColoredLog(lines)
         } catch (_: Exception) {
             logView.text = "Gagal membaca log."
@@ -125,9 +125,31 @@ class LogActivity : Activity() {
         return out
     }
 
-    /** Verbose diagnostics for the Log screen. */
+    /** Debug tracing dinonaktifkan untuk build produksi. */
     private fun debugTrace(message: String) {
-        android.util.Log.d("TravianFarmAssistant", "[DEBUG] $message")
+        // Intentionally empty.
+    }
+
+    private fun isAllowedLogLine(line: String): Boolean {
+        val message = line.substringAfter(" | ", line).trim().replaceFirst(Regex("^\\[CYCLE \\d+\\]\\s*"), "")
+        return message == "CICLE START" ||
+            message == "Click Send All Farmlist Success" ||
+            message.startsWith("Farmlist Before: ") ||
+            message.startsWith("Farmlist After: ") ||
+            message.startsWith("Farmlist Added: ") ||
+            message == "CICLE END" ||
+            message == "Town Builder - START" ||
+            message == "Town Builder - END" ||
+            message.startsWith("Town Builder - Village ") ||
+            message.startsWith("Village ") && message.contains(" Upgrade to Level ") && message.endsWith(" Success") ||
+            message.startsWith("Village ") && message.endsWith(" Upgrade Success") ||
+            message.startsWith("Village ") && message.endsWith(" no upgrade") ||
+            message.startsWith("Village ") && message.contains(" Updated min L") ||
+            message.startsWith("Next Run: ") ||
+            message == "REFRESH VILLAGE START" ||
+            message == "REFRESH VILLAGE END" ||
+            message == "BOT ON" ||
+            message == "BOT OFF"
     }
 
     private fun pruneLogs() {
@@ -137,6 +159,7 @@ class LogActivity : Activity() {
             if (!file.exists()) return
             val cutoff = System.currentTimeMillis() - logMaxAgeMs
             val kept = file.readLines().filter { line ->
+                if (!isAllowedLogLine(line)) return@filter false
                 try {
                     val stamp = line.substringBefore(" | ")
                     val time = logTimeFormat.parse(stamp)?.time ?: return@filter false

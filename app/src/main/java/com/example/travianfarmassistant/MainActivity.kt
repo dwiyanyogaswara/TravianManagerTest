@@ -7,6 +7,7 @@ import android.app.NotificationManager
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.webkit.CookieManager
@@ -22,6 +23,7 @@ import javax.crypto.spec.GCMParameterSpec
 import java.security.KeyStore
 import android.widget.*
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.text.SpannableString
 import android.text.Spanned
 import android.view.View
@@ -63,12 +65,16 @@ class MainActivity : Activity() {
     private lateinit var nextRun: TextView
     private lateinit var farmCycleTime: TextView
     private lateinit var resourceCycleTime: TextView
+    private lateinit var townCycleTime: TextView
+    private lateinit var holdCelebrationCycleTime: TextView
     private lateinit var serverInput: EditText
     private lateinit var usernameInput: EditText
     private lateinit var passwordInput: EditText
     private lateinit var refreshVillageLinkPreview: TextView
     private lateinit var resourceBuilderVillageLinkPreview: TextView
     private lateinit var villageDatabaseView: TextView
+    private lateinit var dbTab: ScrollView
+    private lateinit var dbTabButton: Button
     private lateinit var villageChecklist: LinearLayout
     private var loadedVillages = linkedMapOf<String, String>()
 
@@ -83,11 +89,44 @@ class MainActivity : Activity() {
         val id: String,
         val linkVillage: String,
         val linkResource: String,
-        val minLvl: Int
+        val resourceId: String,
+        val resourceGid: String,
+        val minLvl: Int,
+        val linkTown: String,
+        val townId: String,
+        val townGid: String,
+        val isHoldCelebration: Boolean
     )
 
+    private fun currentServerBase(): String {
+        val raw = if (::serverInput.isInitialized) serverInput.text.toString() else CredentialDatabase(this).read()?.server.orEmpty()
+        return normalizeServer(raw)
+    }
+
+    /**
+     * Semua URL Travian yang tersimpan di database mengikuti server yang sedang
+     * diisi user pada field Server (tepat di atas Username). Path/query tetap,
+     * hanya host/server-nya yang diganti.
+     */
+    private fun rebaseTravianUrl(value: String): String {
+        val clean = value.trim()
+        if (clean.isBlank() || clean == "-") return if (clean == "-") "-" else ""
+        val targetServer = currentServerBase()
+        if (targetServer.isBlank()) return clean
+        return runCatching {
+            val uri = Uri.parse(clean)
+            if (uri.scheme.equals("http", true) || uri.scheme.equals("https", true)) {
+                val path = uri.encodedPath.orEmpty()
+                val query = uri.encodedQuery?.let { "?$it" }.orEmpty()
+                val fragment = uri.encodedFragment?.let { "#$it" }.orEmpty()
+                if (path.isNotBlank()) targetServer + path + query + fragment else targetServer
+            } else {
+                clean
+            }
+        }.getOrDefault(clean)
+    }
+
     private fun loadVillageDataRecords(): MutableList<VillageDataRecord> {
-        debugTrace("ENTER loadVillageDataRecords")
         val raw = getSharedPreferences("config", MODE_PRIVATE)
             .getString(villageDataPrefsKey, "[]").orEmpty()
         val array = runCatching { org.json.JSONArray(raw) }.getOrNull() ?: org.json.JSONArray()
@@ -102,9 +141,15 @@ class MainActivity : Activity() {
                     isChecklist = item.optBoolean("IsChecklist", false),
                     namaVillage = item.optString("NamaVillage").trim().ifBlank { "Village $id" },
                     id = id,
-                    linkVillage = item.optString("LinkVillage").trim(),
-                    linkResource = item.optString("LinkResource").trim(),
-                    minLvl = item.optInt("MinLvl", -1)
+                    linkVillage = rebaseTravianUrl(item.optString("LinkVillage").trim()),
+                    linkResource = rebaseTravianUrl(item.optString("LinkResource").trim()),
+                    resourceId = item.optString("ResourceId").trim(),
+                    resourceGid = item.optString("ResourceGid").trim(),
+                    minLvl = item.optInt("MinLvl", -1),
+                    linkTown = rebaseTravianUrl(item.optString("LinkTown", "-").trim().ifBlank { "-" }),
+                    townId = item.optString("TownId", "").trim(),
+                    townGid = item.optString("TownGid", "").trim(),
+                    isHoldCelebration = item.optBoolean("IsHoldCelebration", false)
                 )
             )
         }
@@ -119,9 +164,15 @@ class MainActivity : Activity() {
                 put("IsChecklist", item.isChecklist)
                 put("NamaVillage", item.namaVillage)
                 put("Id", item.id)
-                put("LinkVillage", item.linkVillage)
-                put("LinkResource", item.linkResource)
+                put("LinkVillage", rebaseTravianUrl(item.linkVillage))
+                put("LinkResource", rebaseTravianUrl(item.linkResource))
+                put("ResourceId", item.resourceId)
+                put("ResourceGid", item.resourceGid)
                 put("MinLvl", item.minLvl)
+                put("LinkTown", rebaseTravianUrl(item.linkTown))
+                put("TownId", item.townId)
+                put("TownGid", item.townGid)
+                put("IsHoldCelebration", item.isHoldCelebration)
             })
         }
         getSharedPreferences("config", MODE_PRIVATE).edit()
@@ -135,8 +186,14 @@ class MainActivity : Activity() {
         namaVillage: String,
         linkVillage: String? = null,
         linkResource: String? = null,
+        resourceId: String? = null,
+        resourceGid: String? = null,
         minLvl: Int? = null,
-        isChecklist: Boolean? = null
+        linkTown: String? = null,
+        townId: String? = null,
+        townGid: String? = null,
+        isChecklist: Boolean? = null,
+        isHoldCelebration: Boolean? = null
     ) {
         debugTrace("ENTER upsertVillageDataRecord")
         val cleanId = id.trim()
@@ -150,9 +207,26 @@ class MainActivity : Activity() {
             id = cleanId,
             linkVillage = linkVillage?.trim()?.takeIf { it.isNotBlank() } ?: old?.linkVillage.orEmpty(),
             linkResource = linkResource?.trim()?.takeIf { it.isNotBlank() } ?: old?.linkResource.orEmpty(),
-            minLvl = minLvl ?: old?.minLvl ?: -1
+            resourceId = resourceId?.trim()?.takeIf { it.isNotBlank() } ?: old?.resourceId.orEmpty(),
+            resourceGid = resourceGid?.trim()?.takeIf { it.isNotBlank() } ?: old?.resourceGid.orEmpty(),
+            minLvl = minLvl ?: old?.minLvl ?: -1,
+            linkTown = linkTown?.trim()?.takeIf { it.isNotBlank() } ?: old?.linkTown ?: "-",
+            townId = townId?.trim() ?: old?.townId.orEmpty(),
+            townGid = townGid?.trim() ?: old?.townGid.orEmpty(),
+            isHoldCelebration = isHoldCelebration ?: old?.isHoldCelebration ?: false
         )
         if (index >= 0) records[index] = updated else records.add(updated)
+        saveVillageDataRecords(records)
+    }
+
+    private fun updateVillageHoldCelebrationData(id: String, checked: Boolean) {
+        debugTrace("ENTER updateVillageHoldCelebrationData")
+        val cleanId = id.trim()
+        if (cleanId.isBlank()) return
+        val records = loadVillageDataRecords()
+        val index = records.indexOfFirst { it.id == cleanId }
+        if (index < 0) return
+        records[index] = records[index].copy(isHoldCelebration = checked)
         saveVillageDataRecords(records)
     }
 
@@ -171,7 +245,7 @@ class MainActivity : Activity() {
         debugTrace("ENTER resetVillageResourceDataForRefresh")
         val records = loadVillageDataRecords()
         if (records.isEmpty()) return
-        saveVillageDataRecords(records.map { it.copy(linkResource = "", minLvl = -1) })
+        saveVillageDataRecords(records.map { it.copy(linkResource = "", resourceId = "", resourceGid = "", minLvl = -1) })
     }
 
     private data class ResourceSnapshot(
@@ -229,7 +303,6 @@ class MainActivity : Activity() {
     private var villageScanIndex = 0
     private var villageScanResults = mutableListOf<Pair<String, String>>()
     private val villageMinLevels = mutableMapOf<String, Int>()
-    private val villageMinResourceDetails = mutableMapOf<String, Pair<String, String>>()
     private var villageScanExpected = 0
     private var villageScanRetry = 0
     private var villageScanPageRetry = 0
@@ -249,6 +322,7 @@ class MainActivity : Activity() {
     private var loginRetryCount = 0
     private var reloginRequested = false
     private var farmListRequested = false
+    private var logoutCleanupInProgress = false
     private var pendingStartAll = false
     private var startAllAttempt = 0
     private var pendingUsername = ""
@@ -289,9 +363,11 @@ class MainActivity : Activity() {
         farmTabButton = findViewById(R.id.farmTabButton)
         capacityTabButton = findViewById(R.id.capacityTabButton)
         logTabButton = findViewById(R.id.logTabButton)
+        dbTabButton = findViewById(R.id.dbTabButton)
         capacityOverview = findViewById(R.id.capacityOverview)
         capacityStatus = findViewById(R.id.capacityStatus)
         logOverview = findViewById(R.id.logOverview)
+        dbTab = findViewById(R.id.dbTab)
         recentLogs = findViewById(R.id.recentLogs)
         botToggle = findViewById(R.id.botToggle)
         setupTabs()
@@ -310,6 +386,8 @@ class MainActivity : Activity() {
         nextRun = findViewById(R.id.nextRun)
         farmCycleTime = findViewById(R.id.farmCycleTime)
         resourceCycleTime = findViewById(R.id.resourceCycleTime)
+        townCycleTime = findViewById(R.id.townCycleTime)
+        holdCelebrationCycleTime = findViewById(R.id.holdCelebrationCycleTime)
         webView = findViewById(R.id.webView)
         pruneLogs()
         handler.postDelayed(logCleanup, 60 * 60 * 1000L)
@@ -322,10 +400,24 @@ class MainActivity : Activity() {
 
         val prefs = getSharedPreferences("config", MODE_PRIVATE)
         restoreResourceSnapshots(prefs)
-        logEvent("Aplikasi v4.14 dimulai")
-        serverInput.setText(prefs.getString("server", "https://ts20.x2.europe.travian.com"))
-        usernameInput.setText(prefs.getString("username", ""))
-        passwordInput.setText(decryptSavedPassword(prefs.getString("password_secure", "").orEmpty()))
+        logEvent("Aplikasi v4.14.15 dimulai")
+        val savedCredential = CredentialDatabase(this).read()
+        // Tampilkan template server agar user cukup mengganti bagian host, misalnya:
+        // https://ts20.x2.europe.travian.com
+        val defaultServer = "https://.travian.com"
+        serverInput.setText(savedCredential?.server?.takeIf { it.isNotBlank() } ?: defaultServer)
+        usernameInput.setText(savedCredential?.username ?: "")
+        passwordInput.setText(savedCredential?.password ?: "")
+        if (savedCredential == null) {
+            // One-time migration from the old encrypted SharedPreferences store.
+            val legacyPassword = decryptSavedPassword(prefs.getString("password_secure", "").orEmpty())
+            val legacyUser = prefs.getString("username", "").orEmpty()
+            val legacyServer = normalizeServer(prefs.getString("server", "").orEmpty())
+            if (legacyUser.isNotBlank() && legacyPassword.isNotBlank()) {
+                runCatching { CredentialDatabase(this).save(legacyServer, legacyUser, legacyPassword) }
+                prefs.edit().remove("password_secure").apply()
+            }
+        }
 
         minIntervalInput = findViewById(R.id.intervalMin)
         maxIntervalInput = findViewById(R.id.intervalMax)
@@ -336,8 +428,10 @@ class MainActivity : Activity() {
 
         val farmListEnabledCheck = findViewById<CheckBox>(R.id.farmListEnabled)
         val resourceBuilderCheck = findViewById<CheckBox>(R.id.resourceBuilder)
+        val townBuilderCheck = findViewById<CheckBox>(R.id.townBuilder)
         farmListEnabledCheck.isChecked = prefs.getBoolean("farm_list_enabled", true)
         resourceBuilderCheck.isChecked = prefs.getBoolean("resource_builder_enabled", true)
+        townBuilderCheck.isChecked = prefs.getBoolean("town_builder_enabled", false)
 
         villageChecklist = findViewById(R.id.villageChecklist)
         villageDatabaseView = findViewById(R.id.villageDatabaseView)
@@ -427,6 +521,11 @@ class MainActivity : Activity() {
             startAutomaticLogin()
         }
 
+
+        findViewById<Button>(R.id.logoutTravian).setOnClickListener {
+            confirmLogoutAndClearDatabase()
+        }
+
         val serviceRunning = getSharedPreferences("config", MODE_PRIVATE)
             .getBoolean("service_running", false)
         running = serviceRunning
@@ -456,12 +555,20 @@ class MainActivity : Activity() {
         selectionControlsLocked = locked
         val farmListCheck = findViewById<CheckBox>(R.id.farmListEnabled)
         val resourceBuilderCheck = findViewById<CheckBox>(R.id.resourceBuilder)
+        val townBuilderCheck = findViewById<CheckBox>(R.id.townBuilder)
         farmListCheck.isEnabled = !locked
         resourceBuilderCheck.isEnabled = !locked
+        townBuilderCheck.isEnabled = !locked
         findViewById<Button>(R.id.refreshVillages).isEnabled = !locked
         if (::villageChecklist.isInitialized) {
             for (i in 0 until villageChecklist.childCount) {
-                (villageChecklist.getChildAt(i) as? CheckBox)?.isEnabled = !locked
+                val child = villageChecklist.getChildAt(i)
+                (child as? CheckBox)?.isEnabled = !locked
+                if (child is LinearLayout) {
+                    for (j in 0 until child.childCount) {
+                        child.getChildAt(j).isEnabled = !locked
+                    }
+                }
             }
         }
     }
@@ -477,6 +584,7 @@ class MainActivity : Activity() {
                 botToggle.setOnCheckedChangeListener(this@MainActivity::handleBotToggle)
             }
         } else {
+            logEvent("BOT OFF")
             stopScheduler()
         }
     }
@@ -511,6 +619,7 @@ class MainActivity : Activity() {
         val server = normalizeServer(serverInput.text.toString())
         val farmListEnabled = findViewById<CheckBox>(R.id.farmListEnabled).isChecked
         val resourceBuilderEnabled = findViewById<CheckBox>(R.id.resourceBuilder).isChecked
+        val townBuilderEnabled = findViewById<CheckBox>(R.id.townBuilder).isChecked
         val user = usernameInput.text.toString().trim()
         val pass = passwordInput.text.toString()
         if (user.isBlank() || pass.isBlank()) {
@@ -519,20 +628,18 @@ class MainActivity : Activity() {
             return false
         }
 
-        // Sinkronkan IsChecklist di database village menjadi sumber data Builder.
-        val selectedNow = selectedVillageIds()
-        val currentVillageRecords = loadVillageDataRecords()
-        if (currentVillageRecords.isNotEmpty()) {
-            saveVillageDataRecords(currentVillageRecords.map { it.copy(isChecklist = selectedNow.contains(it.id)) })
-        }
+        // PENTING: Toggle BOT hanya memulai service.
+        // Jangan menulis ulang IsChecklist dari UI di sini karena saat kontrol
+        // dikunci/dirender ulang state checkbox UI bisa sementara kosong dan
+        // akhirnya mengubah checklist database menjadi unchecked.
+        // FarmAutomationService akan membaca IsChecklist langsung dari database.
 
         getSharedPreferences("config", MODE_PRIVATE).edit()
-            .putString("server", server)
-            .putString("username", user)
             .putLong("interval_min_minutes", minMinutes)
             .putLong("interval_max_minutes", maxMinutes)
             .putBoolean("farm_list_enabled", farmListEnabled)
             .putBoolean("resource_builder_enabled", resourceBuilderEnabled)
+            .putBoolean("town_builder_enabled", townBuilderEnabled)
             .putBoolean("resource_builder_selection_configured", loadedVillages.isNotEmpty())
             .putStringSet("resource_builder_selected_villages", selectedVillageIds())
             .putString("resource_builder_villages_json", villageSelectionJson())
@@ -544,7 +651,7 @@ class MainActivity : Activity() {
         setSelectionControlsLocked(true)
         updateBotToggleVisual(true)
         farmStatus.text = "Background automation sedang dimulai..."
-        logEvent("Memulai background automation. Range=${minMinutes}-${maxMinutes} menit; Farm List=${if (farmListEnabled) "ON" else "OFF"}; Resource Builder=${if (resourceBuilderEnabled) "ON" else "OFF"}")
+        logEvent("Memulai background automation. Range=${minMinutes}-${maxMinutes} menit; Farm List=${if (farmListEnabled) "ON" else "OFF"}; Resource Builder=${if (resourceBuilderEnabled) "ON" else "OFF"}; Town Builder=${if (townBuilderEnabled) "ON" else "OFF"}")
 
         val intent = android.content.Intent(this, FarmAutomationService::class.java).apply {
             action = FarmAutomationService.ACTION_START
@@ -555,6 +662,7 @@ class MainActivity : Activity() {
             putExtra(FarmAutomationService.EXTRA_MINUTES_MAX, maxMinutes)
             putExtra(FarmAutomationService.EXTRA_FARM_LIST_ENABLED, farmListEnabled)
             putExtra(FarmAutomationService.EXTRA_RESOURCE_BUILDER, resourceBuilderEnabled)
+            putExtra(FarmAutomationService.EXTRA_TOWN_BUILDER, townBuilderEnabled)
             putExtra(FarmAutomationService.EXTRA_SELECTED_VILLAGES, selectedVillageIds().toTypedArray())
             putExtra(FarmAutomationService.EXTRA_SELECTED_VILLAGES_JSON, villageSelectionJson())
             putExtra(FarmAutomationService.EXTRA_SELECTION_CONFIGURED, loadedVillages.isNotEmpty())
@@ -564,6 +672,7 @@ class MainActivity : Activity() {
         } else {
             startService(intent)
         }
+        logEvent("BOT ON")
         return true
     }
 
@@ -579,11 +688,9 @@ class MainActivity : Activity() {
             return
         }
 
-        getSharedPreferences("config", MODE_PRIVATE)
-            .edit()
-            .putString("server", server)
-            .putString("username", pendingUsername)
-            .apply()
+        // Credential disimpan hanya di CredentialDatabase setelah login; jangan menulis
+        // server/user/password ke SharedPreferences sebagai credential store.
+
 
         loginInProgress = true
         reloginRequested = false
@@ -595,6 +702,110 @@ class MainActivity : Activity() {
         webView.loadUrl(server)
     }
 
+
+    private fun confirmLogoutAndClearDatabase() {
+        debugTrace("ENTER confirmLogoutAndClearDatabase")
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Logout dan hapus semua data?")
+            .setMessage("Bot akan dihentikan dan seluruh data aplikasi akan dihapus: Village, Resource Builder, Capacity Overview, konfigurasi, credential, session Travian, cache WebView, dan log.")
+            .setNegativeButton("BATAL", null)
+            .setPositiveButton("LOGOUT & HAPUS SEMUA") { _, _ ->
+                logoutCleanupInProgress = true
+                logEvent("LOGOUT & HAPUS SEMUA dimulai")
+
+                val logoutJs = """
+                    (() => {
+                        try {
+                            const el = document.querySelector(
+                                'a.layoutButton.logout[onclick*="auth/logout"], a#button6aaa328d7a848'
+                            );
+                            if (el) { el.click(); return 'clicked'; }
+                            return 'not_found';
+                        } catch (e) { return 'error'; }
+                    })();
+                """.trimIndent()
+
+                runCatching { webView.evaluateJavascript(logoutJs, null) }
+                runCatching { FarmAutomationService.requestTravianLogout() }
+
+                handler.postDelayed({
+                    if (isFinishing) return@postDelayed
+                    completeLogoutAndClearDatabase()
+                }, 1200L)
+            }
+            .show()
+    }
+
+    private fun completeLogoutAndClearDatabase() {
+        debugTrace("ENTER completeLogoutAndClearDatabase")
+
+        if (running || getSharedPreferences("config", MODE_PRIVATE).getBoolean("service_running", false)) {
+            stopScheduler()
+        } else {
+            running = false
+            pendingStartAll = false
+        }
+
+        runCatching { CredentialDatabase(this).clear() }
+        getSharedPreferences("config", MODE_PRIVATE).edit().clear().commit()
+
+        loadedVillages.clear()
+        villageScanActive = false
+        villageScanTargets.clear()
+        villageScanResults.clear()
+        villageScanIndex = 0
+        villageScanExpected = 0
+        villageScanRetry = 0
+        villageScanPageRetry = 0
+        villageScanDataRetry = 0
+        villageScanScrollPass = 0
+        villageScanCollectedTargets.clear()
+        villageScanCollectedLinks.clear()
+        villageScanCollectInFlight = false
+        resourceSnapshots.clear()
+        villageMinLevels.clear()
+        pendingUsername = ""
+        pendingPassword = ""
+        loginInProgress = false
+        reloginRequested = false
+        farmListRequested = false
+        logoutCleanupInProgress = false
+
+        if (::villageChecklist.isInitialized) villageChecklist.removeAllViews()
+        if (::capacityOverview.isInitialized) capacityOverview.removeAllViews()
+        if (::capacityStatus.isInitialized) {
+            capacityStatus.text = "Belum ada data resource. Tekan REFRESH VILLAGE untuk membaca semua village."
+        }
+        if (::villageDatabaseView.isInitialized) villageDatabaseView.text = "DATABASE VILLAGE: kosong"
+        if (::refreshVillageLinkPreview.isInitialized) refreshVillageLinkPreview.text = "REFRESH VILLAGE LINK: -"
+        if (::resourceBuilderVillageLinkPreview.isInitialized) resourceBuilderVillageLinkPreview.text = "RES BUILDER LINK: -"
+
+        usernameInput.setText("")
+        passwordInput.setText("")
+        status.text = "Status: LOGOUT"
+        farmStatus.text = "Logout berhasil — semua data aplikasi dihapus."
+        nextRun.text = "Next run: --"
+        updateBotToggleVisual(false)
+        botToggle.setOnCheckedChangeListener(null)
+        botToggle.isChecked = false
+        botToggle.setOnCheckedChangeListener(this@MainActivity::handleBotToggle)
+        setSelectionControlsLocked(false)
+
+        val cookieManager = CookieManager.getInstance()
+        cookieManager.removeAllCookies {
+            cookieManager.flush()
+            runOnUiThread {
+                runCatching { webView.stopLoading() }
+                runCatching { webView.clearCache(true) }
+                runCatching { webView.clearHistory() }
+                runCatching { webView.clearFormData() }
+                runCatching { android.webkit.WebStorage.getInstance().deleteAllData() }
+            }
+        }
+        cookieManager.flush()
+        clearActivityLog()
+    }
+
     private fun clearVillageDatabaseOnLogout(url: String) {
         val prefs = getSharedPreferences("config", MODE_PRIVATE)
         val raw = prefs.getString(villageDataPrefsKey, "[]").orEmpty()
@@ -604,6 +815,8 @@ class MainActivity : Activity() {
             .remove("resource_builder_targets_json")
             .remove("resource_builder_villages_json")
             .remove("resource_builder_selected_villages")
+            .remove("resource_builder_selection_configured")
+            .remove("resource_snapshots_json")
             .apply()
         loadedVillages.clear()
         if (::villageChecklist.isInitialized) villageChecklist.removeAllViews()
@@ -725,7 +938,7 @@ class MainActivity : Activity() {
         val array = org.json.JSONArray()
         loadedVillages.forEach { (id, name) ->
             if (selected.contains(id)) {
-                val savedLink = recordsById[id]?.linkVillage.orEmpty()
+                val savedLink = rebaseTravianUrl(recordsById[id]?.linkVillage.orEmpty())
                 val canonicalLink = savedLink.ifBlank { "$server/dorf1.php?newdid=$id" }
                 array.put(JSONObject().apply {
                     put("id", id)
@@ -740,11 +953,17 @@ class MainActivity : Activity() {
     private fun selectedVillageIds(): Set<String> {
         debugTrace("ENTER selectedVillageIds")
         if (!::villageChecklist.isInitialized) return emptySet()
-        return (0 until villageChecklist.childCount)
-            .mapNotNull { villageChecklist.getChildAt(it) as? CheckBox }
-            .filter { it.isChecked }
-            .mapNotNull { it.tag?.toString()?.trim()?.takeIf(String::isNotBlank) }
-            .toSet()
+        val ids = mutableSetOf<String>()
+        for (i in 1 until villageChecklist.childCount) {
+            val row = villageChecklist.getChildAt(i) as? LinearLayout ?: continue
+            for (j in 0 until row.childCount) {
+                val card = row.getChildAt(j) as? LinearLayout ?: continue
+                val id = card.tag?.toString().orEmpty()
+                val box = card.findViewWithTag<CheckBox>("resource:$id")
+                if (box?.isChecked == true && id.isNotBlank()) ids.add(id)
+            }
+        }
+        return ids
     }
 
     private fun restoreVillageSelection(prefs: android.content.SharedPreferences) {
@@ -764,10 +983,10 @@ class MainActivity : Activity() {
 
         val lines = mutableListOf<String>()
         lines += "DATABASE VILLAGE (${records.size})"
-        lines += "CHK | NAMA | ID | LINK VILLAGE | LINK RESOURCE | MIN LVL"
-        lines += "----+------+----+--------------+---------------+-------"
+        lines += "CHK | NAMA | ID | LINK VILLAGE | LINK RESOURCE | RES ID | GID | MIN LVL | TOWN ID | TOWN GID | LINK TOWN | HOLD CELEBRATION"
+        lines += "----+------+----+--------------+---------------+--------+-----+-------+---------+----------+-----------+-----------------"
         records.forEach { item ->
-            lines += "${if (item.isChecklist) "✓" else "-"} | ${item.namaVillage} | ${item.id} | ${item.linkVillage.ifBlank { "-" }} | ${item.linkResource.ifBlank { "-" }} | ${if (item.minLvl >= 0) "L${item.minLvl}" else "-"}"
+            lines += "${if (item.isChecklist) "✓" else "-"} | ${item.namaVillage} | ${item.id} | ${item.linkVillage.ifBlank { "-" }} | ${item.linkResource.ifBlank { "-" }} | ${item.resourceId.ifBlank { "-" }} | ${item.resourceGid.ifBlank { "-" }} | ${if (item.minLvl >= 0) "L${item.minLvl}" else "-"} | ${item.townId.ifBlank { "-" }} | ${item.townGid.ifBlank { "-" }} | ${item.linkTown.ifBlank { "-" }} | ${if (item.isHoldCelebration) "✓" else "-"}"
         }
         villageDatabaseView.text = lines.joinToString("\n")
         villageDatabaseView.setTextIsSelectable(true)
@@ -789,13 +1008,11 @@ class MainActivity : Activity() {
             if (id.isNotBlank()) {
                 val villageName = name.ifBlank { "Village $id" }
                 val minLevel = villageMinLevels[id]
-                val resourceDetail = villageMinResourceDetails[id]
+                val resourceDetailId = loadVillageDataRecords().firstOrNull { it.id == id }
+                    ?.linkResource?.let { href -> Regex("[?&]id=(\\d+)", RegexOption.IGNORE_CASE).find(href)?.groupValues?.getOrNull(1) }
                 loadedVillages[id] = if (minLevel != null && minLevel >= 0) {
-                    if (resourceDetail != null) {
-                        "$villageName - Lvl $minLevel ${resourceDetail.first} ${resourceDetail.second}"
-                    } else {
-                        "$villageName - Lvl $minLevel"
-                    }
+                    if (!resourceDetailId.isNullOrBlank()) "$villageName - Lvl $minLevel id$resourceDetailId"
+                    else "$villageName - Lvl $minLevel"
                 } else {
                     "$villageName - Lvl ?"
                 }
@@ -816,35 +1033,242 @@ class MainActivity : Activity() {
             isChecked = if (configured) loadedVillages.keys.all { saved.contains(it) } else true
             setOnCheckedChangeListener { _, checked ->
                 for (i in 1 until villageChecklist.childCount) {
-                    val box = villageChecklist.getChildAt(i) as? CheckBox ?: continue
-                    box.isChecked = checked
-                    box.tag?.toString()?.let { updateVillageChecklistData(it, checked) }
+                    val card = villageChecklist.getChildAt(i) as? LinearLayout ?: continue
+                    val id = card.tag?.toString().orEmpty()
+                    val box = card.findViewWithTag<CheckBox>("resource:$id")
+                    if (box != null) {
+                        box.isChecked = checked
+                        updateVillageChecklistData(id, checked)
+                    }
                 }
                 getSharedPreferences("config", MODE_PRIVATE).edit()
                     .putBoolean("resource_builder_selection_configured", true)
                     .putStringSet("resource_builder_selected_villages", selectedVillageIds())
+                    .putString("resource_builder_villages_json", villageSelectionJson())
                     .apply()
             }
         }
         selectAll.isEnabled = !selectionControlsLocked
         villageChecklist.addView(selectAll)
 
-        loadedVillages.forEach { (id, name) ->
-            villageChecklist.addView(CheckBox(this).apply {
-                text = name
+        val townServer = currentServerBase()
+        val townOptions = listOf(
+            "-" to "-",
+            "$townServer/build.php?id=26&gid=15" to "Main Building",
+            "$townServer/build.php?id=22&gid=10" to "Warehouse",
+            "$townServer/build.php?id=29&gid=11" to "Granary",
+            "$townServer/build.php?id=31&gid=17" to "Marketplace",
+            "$townServer/build.php?id=39&gid=16" to "Rally Point",
+            "$townServer/build.php?id=35&gid=19" to "Barracks",
+            "$townServer/build.php?id=38&gid=20" to "Stable",
+            "$townServer/build.php?id=23&gid=22" to "Academy",
+            "$townServer/build.php?id=40&gid=31" to "City Wall",
+            "$townServer/build.php?id=25&gid=41" to "Residence",
+            "$townServer/build.php?id=33&gid=13" to "Smithy",
+            "$townServer/build.php?id=30&gid=24" to "Town Hall",
+            "$townServer/build.php?id=34&gid=37" to "Hero's Mansion",
+            "$townServer/build.php?id=20&gid=23" to "Cranny",
+            "$townServer/build.php?id=36&gid=21" to "Workshop",
+            "__OTHER__" to "Others"
+        )
+
+        loadedVillages.entries.toList().forEach { (id, name) ->
+
+            val record = villageRecords[id]
+            val currentMinLevel = record?.minLvl ?: -1
+            val standardTownKeys = townOptions.map { it.first }.filter { it != "__OTHER__" }.toSet()
+            val currentTownKey = record?.linkTown?.trim().orEmpty().ifBlank { "-" }.let {
+                if (it in standardTownKeys) it else if (!record?.townId.isNullOrBlank() || !record?.townGid.isNullOrBlank()) "__OTHER__" else it
+            }
+            val currentTownId = record?.townId.orEmpty()
+            val currentTownGid = record?.townGid.orEmpty()
+            val currentHoldCelebration = record?.isHoldCelebration ?: false
+
+            var townFieldsInitialized = false
+            lateinit var cardTownId: EditText
+            lateinit var cardTownGid: EditText
+            lateinit var otherInputRow: LinearLayout
+
+            fun townDisplayText(townKey: String): String {
+                val townText = if (townKey == "__OTHER__") {
+                    val oid = if (townFieldsInitialized) cardTownId.text.toString().trim() else currentTownId
+                    val ogid = if (townFieldsInitialized) cardTownGid.text.toString().trim() else currentTownGid
+                    if (oid.isNotBlank() || ogid.isNotBlank()) "Others (id=$oid gid=$ogid)" else "Others"
+                } else townOptions.firstOrNull { it.first == townKey }?.second ?: "-"
+                val minText = if (currentMinLevel >= 0) "L$currentMinLevel" else "-"
+                val displayName = name.substringBefore(" - Lvl ").trim().ifBlank { name }
+                return "$displayName - min lvl $minText - $townText"
+            }
+
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(8, 6, 8, 8)
                 tag = id
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    setMargins(3, 4, 3, 4)
+                }
+                background = GradientDrawable().apply {
+                    setColor(Color.TRANSPARENT)
+                    setStroke(2, Color.GRAY)
+                    cornerRadius = 8f
+                }
+            }
+
+            val box = CheckBox(this).apply {
+                text = townDisplayText(currentTownKey)
+                tag = "resource:$id"
                 isEnabled = !selectionControlsLocked
                 isChecked = if (configured) saved.contains(id) else true
                 setOnCheckedChangeListener { _, checked ->
                     updateVillageChecklistData(id, checked)
-                    // Legacy prefs tetap disimpan agar versi lama tetap kompatibel.
                     getSharedPreferences("config", MODE_PRIVATE).edit()
                         .putBoolean("resource_builder_selection_configured", true)
                         .putStringSet("resource_builder_selected_villages", selectedVillageIds())
                         .putString("resource_builder_villages_json", villageSelectionJson())
                         .apply()
                 }
-            })
+            }
+
+            val townAndHold = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            }
+
+            val spinner = Spinner(this).apply {
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                adapter = object : android.widget.ArrayAdapter<String>(
+                    this@MainActivity,
+                    android.R.layout.simple_spinner_item,
+                    townOptions.map { it.second }
+                ) {
+                    override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                        val tv = (convertView as? TextView) ?: TextView(this@MainActivity)
+                        tv.text = getItem(position).orEmpty()
+                        tv.setTextColor(Color.WHITE)
+                        tv.textSize = 13f
+                        tv.gravity = android.view.Gravity.CENTER_VERTICAL
+                        tv.setSingleLine(true)
+                        tv.ellipsize = android.text.TextUtils.TruncateAt.END
+                        tv.setPadding(8, 4, 6, 4)
+                        return tv
+                    }
+
+                    override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View {
+                        val tv = (convertView as? TextView) ?: TextView(this@MainActivity)
+                        tv.text = getItem(position).orEmpty()
+                        tv.setTextColor(Color.WHITE)
+                        tv.textSize = 14f
+                        tv.setPadding(12, 10, 12, 10)
+                        tv.setSingleLine(true)
+                        return tv
+                    }
+                }
+                setSelection(townOptions.indexOfFirst { it.first == currentTownKey }.coerceAtLeast(0))
+                isEnabled = !selectionControlsLocked
+                onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                    override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+                    override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, itemId: Long) {
+                        if (!townFieldsInitialized) return
+                        val selectedLink = townOptions.getOrNull(position)?.first ?: "-"
+                        if (selectedLink == "__OTHER__") {
+                            otherInputRow.visibility = View.VISIBLE
+                            val oid = cardTownId.text.toString().trim()
+                            val ogid = cardTownGid.text.toString().trim()
+                            val link = if (oid.isNotBlank() && ogid.isNotBlank()) "$townServer/build.php?id=$oid&gid=$ogid" else "-"
+                            val recordsNow = loadVillageDataRecords()
+                            val idx = recordsNow.indexOfFirst { it.id == id }
+                            if (idx >= 0) {
+                                recordsNow[idx] = recordsNow[idx].copy(linkTown = link, townId = oid, townGid = ogid)
+                                saveVillageDataRecords(recordsNow)
+                            }
+                        } else {
+                            otherInputRow.visibility = View.GONE
+                            box.text = townDisplayText(selectedLink)
+                            val recordsNow = loadVillageDataRecords()
+                            val idx = recordsNow.indexOfFirst { it.id == id }
+                            if (idx >= 0) {
+                                recordsNow[idx] = recordsNow[idx].copy(linkTown = selectedLink, townId = "", townGid = "")
+                                saveVillageDataRecords(recordsNow)
+                            }
+                        }
+                        box.text = townDisplayText(selectedLink)
+                    }
+                }
+            }
+
+            otherInputRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                visibility = if (currentTownKey == "__OTHER__") View.VISIBLE else View.GONE
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            }
+
+            cardTownId = EditText(this).apply {
+                hint = "ID"
+                inputType = android.text.InputType.TYPE_CLASS_NUMBER
+                setText(currentTownId)
+                textSize = 13f
+                setSingleLine(true)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    setMargins(4, 0, 4, 0)
+                }
+                isEnabled = !selectionControlsLocked
+            }
+            cardTownGid = EditText(this).apply {
+                hint = "GID"
+                inputType = android.text.InputType.TYPE_CLASS_NUMBER
+                setText(currentTownGid)
+                textSize = 13f
+                setSingleLine(true)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    setMargins(4, 0, 4, 0)
+                }
+                isEnabled = !selectionControlsLocked
+            }
+
+            fun saveOtherTown() {
+                val oid = cardTownId.text.toString().trim()
+                val ogid = cardTownGid.text.toString().trim()
+                val link = if (oid.isNotBlank() && ogid.isNotBlank()) "$townServer/build.php?id=$oid&gid=$ogid" else "-"
+                val recordsNow = loadVillageDataRecords()
+                val idx = recordsNow.indexOfFirst { it.id == id }
+                if (idx >= 0) {
+                    recordsNow[idx] = recordsNow[idx].copy(linkTown = link, townId = oid, townGid = ogid)
+                    saveVillageDataRecords(recordsNow)
+                    box.text = townDisplayText("__OTHER__")
+                }
+            }
+            cardTownId.setOnFocusChangeListener { _, hasFocus -> if (!hasFocus && currentTownKey == "__OTHER__") saveOtherTown() }
+            cardTownGid.setOnFocusChangeListener { _, hasFocus -> if (!hasFocus && currentTownKey == "__OTHER__") saveOtherTown() }
+
+            otherInputRow.addView(cardTownId)
+            otherInputRow.addView(cardTownGid)
+            townFieldsInitialized = true
+            
+            val hold = CheckBox(this).apply {
+                text = "isHoldCelebration"
+                textSize = 11f
+                setPadding(4, 0, 0, 0)
+                isEnabled = !selectionControlsLocked
+                isChecked = currentHoldCelebration
+                setOnCheckedChangeListener { _, checked ->
+                    updateVillageHoldCelebrationData(id, checked)
+                }
+            }
+
+            townAndHold.addView(spinner)
+            townAndHold.addView(hold)
+            card.addView(box)
+            card.addView(townAndHold)
+            card.addView(otherInputRow)
+            villageChecklist.addView(card)
         }
 
         logEvent("UI: ${loadedVillages.size} village dimuat: ${loadedVillages.values.joinToString(" | ")}")
@@ -893,6 +1317,12 @@ class MainActivity : Activity() {
 
                             const clickable = node?.closest?.('a,button,[role="button"],input,select,summary') || node;
                             if (!clickable) return;
+
+                            const isTravianLogout = clickable.id === 'button6aaa328d7a848' ||
+                                (clickable.matches?.('a.logout') && /auth\/logout/i.test(clickable.getAttribute('onclick') || ''));
+                            if (isTravianLogout) {
+                                try { AndroidFarm.onTravianLogoutClick(); } catch (_) {}
+                            }
 
                             const entry = clickable.closest?.('.listEntry, .dropContainer, li');
                             const anchor = clickable.matches?.('a[href]')
@@ -988,6 +1418,7 @@ class MainActivity : Activity() {
         villageName: String,
         level: Int,
         fieldId: String,
+        fieldGid: String,
         href: String
     ) {
         debugTrace("ENTER saveResourceBuilderTarget")
@@ -1001,13 +1432,14 @@ class MainActivity : Activity() {
             put("name", villageName)
             put("level", level)
             put("fieldId", fieldId)
+            put("fieldGid", fieldGid)
             put("href", cleanHref)
             put("savedAt", System.currentTimeMillis())
         })
         prefs.edit().putString("resource_builder_targets_json", obj.toString()).apply()
         logEvent(
             "UI: TARGET RESOURCE tersimpan — $villageName [${villageId}] " +
-                "L$level field=$fieldId href=$cleanHref"
+                "L$level id=$fieldId gid=$fieldGid href=$cleanHref"
         )
     }
 
@@ -1017,7 +1449,6 @@ class MainActivity : Activity() {
         villageScanTargets.clear()
         villageScanResults.clear()
         villageMinLevels.clear()
-        villageMinResourceDetails.clear()
         villageScanIndex = 0
         villageScanExpected = 0
         villageScanRetry = 0
@@ -1031,7 +1462,7 @@ class MainActivity : Activity() {
         clearSavedResourceBuilderTargets()
 
         farmStatus.text = "Refresh village: membaca daftar village..."
-        logEvent("UI: REFRESH VILLAGE → membuka dorf1.php")
+        logEvent("REFRESH VILLAGE START")
         val server = normalizeServer(serverInput.text.toString())
         webView.loadUrl("$server/dorf1.php")
     }
@@ -1233,7 +1664,6 @@ class MainActivity : Activity() {
         villageScanTargets = discovered.toMutableList()
         villageScanResults.clear()
         villageMinLevels.clear()
-        villageMinResourceDetails.clear()
         villageScanIndex = 0
         villageScanRetry = 0
         villageScanDataRetry = 0
@@ -1257,6 +1687,7 @@ class MainActivity : Activity() {
         }
 
         val (id, name) = villageScanTargets[villageScanIndex]
+
         val progress = "${villageScanIndex + 1}/${villageScanTargets.size}"
 
         // Simpan URL tujuan pindah village untuk ditampilkan tepat di bawah tombol LOGIN.
@@ -1419,73 +1850,162 @@ class MainActivity : Activity() {
                     return;
                 }
 
-                // RESOURCE FIELDS: jangan bergantung pada satu class. Travian dapat
-                // menaruh level pada class level10, data-level, title, aria-label,
-                // atau elemen anak dari field. Karena container khusus resource field,
-                // kita scan seluruh turunannya dan deduplicate level yang ditemukan.
+                // RESOURCE FIELDS:
+                // Jangan menentukan field terendah dari kumpulan "level" yang ditemukan
+                // secara terpisah. Level harus selalu diikat ke FIELD yang sama dengan
+                // ID dan GID-nya. Jika tidak, level dari field A bisa salah dipasangkan
+                // dengan ID/GID field B.
                 const container = document.querySelector('#resourceFieldContainer');
-                const fields = [];
                 const debugFields = [];
-                const fieldNodes = container ? [...container.querySelectorAll('*')] : [];
-                for (const node of fieldNodes) {
-                    const candidates = [
-                        node.getAttribute?.('data-level') || '',
-                        node.getAttribute?.('title') || '',
-                        node.getAttribute?.('aria-label') || '',
-                        String(node.className || ''),
-                        clean(node.textContent || '')
-                    ];
-                    let level = -1;
-                    for (const text of candidates) {
-                        const m = String(text).match(/(?:^|[\s_-])level\s*(\d+)\b/i) ||
-                                  String(text).match(/\blevel(\d+)\b/i);
-                        if (m) { level = parseInt(m[1],10); break; }
-                    }
-                    if (level >= 0) {
-                        fields.push(level);
-                        if (debugFields.length < 30) {
-                            debugFields.push({level, tag:node.tagName || '', className:String(node.className || '').slice(0,140), text:clean(node.textContent || '').slice(0,60)});
-                        }
-                    }
-                }
-                const levels = fields.filter(n => Number.isFinite(n));
-                const uniqueLevels = levels.slice(0, 18);
-
-                // Simpan LINK field dengan level terendah. Ini menjadi target yang
-                // dipakai Resource Builder saat eksekusi berikutnya. Link diambil
-                // langsung dari anchor field agar id/link tetap spesifik ke village.
-                const resourceAnchors = container
-                    ? [...container.querySelectorAll('a[href*="build.php?id="]')]
-                    : [];
                 const resourceCandidates = [];
                 const seenResourceIds = new Set();
-                for (const a of resourceAnchors) {
-                    const href = a.getAttribute('href') || '';
-                    const m = href.match(/[?&]id=(\d+)/i);
-                    if (!m || seenResourceIds.has(m[1])) continue;
-                    const fieldId = parseInt(m[1], 10);
-                    if (!Number.isFinite(fieldId) || fieldId < 1 || fieldId > 18) continue;
-                    seenResourceIds.add(m[1]);
-                    let level = -1;
-                    let node = a;
-                    for (let depth = 0; depth < 8 && node; depth++, node = node.parentElement) {
-                        const text = clean(node.innerText || node.textContent || '');
-                        const attrs = [
-                            node.getAttribute?.('data-level') || '',
+
+                const attr = (el, names) => {
+                    for (const name of names) {
+                        const value = el?.getAttribute?.(name);
+                        if (value != null && String(value).trim() !== '') return String(value).trim();
+                    }
+                    return '';
+                };
+
+                const numberFrom = (value, patterns) => {
+                    const text = String(value || '');
+                    for (const pattern of patterns) {
+                        const m = text.match(pattern);
+                        if (m) return parseInt(m[1], 10);
+                    }
+                    return -1;
+                };
+
+                const readFieldValue = (anchor, names, patterns, maxDepth = 10) => {
+                    let node = anchor;
+                    for (let depth = 0; depth < maxDepth && node; depth++, node = node.parentElement) {
+                        const className = typeof node.className === 'string' ? node.className : '';
+                        const values = [
+                            ...names.map(name => node.getAttribute?.(name) || ''),
                             node.getAttribute?.('title') || '',
                             node.getAttribute?.('aria-label') || '',
-                            String(node.className || '')
-                        ].join(' ');
-                        const lm = text.match(/(?:level|lvl)\s*(\d+)/i) || attrs.match(/level\s*(\d+)/i);
-                        if (lm) { level = parseInt(lm[1], 10); break; }
+                            className
+                        ];
+                        const value = numberFrom(values.join(' '), patterns);
+                        if (value >= 0) return value;
                     }
-                    const disabled = a.classList.contains('disabled') || !!a.closest('.disabled') ||
-                        a.getAttribute('aria-disabled') === 'true' || a.getAttribute('data-disabled') === 'true';
-                    resourceCandidates.push({fieldId, level, href, disabled});
-                }
-                resourceCandidates.sort((a,b) => a.level - b.level || a.fieldId - b.fieldId);
-                const lowestResource = resourceCandidates.find(x => !x.disabled && x.level >= 0 && x.level < 10) || null;
+                    return -1;
+                };
 
+                // Ambil anchor field dari container. Fallback ke seluruh elemen yang
+                // terlihat seperti slot field bila tema Travian tidak memakai href standar.
+                const fieldAnchors = container
+                    ? [...container.querySelectorAll('a[href*="build.php?id="], a[data-id], a[id], .buildingSlot a, .resourceField a')]
+                    : [];
+
+                for (const a of fieldAnchors) {
+                    const hrefRaw = a.getAttribute('href') || '';
+                    const absoluteHref = (() => {
+                        try { return new URL(hrefRaw, location.href); } catch (_) { return null; }
+                    })();
+
+                    // ID field: prioritas query id=, lalu data-id/id/class pada anchor/ancestor.
+                    let fieldId = absoluteHref?.searchParams.get('id') ?
+                        parseInt(absoluteHref.searchParams.get('id'), 10) : -1;
+                    if (!(fieldId >= 1 && fieldId <= 18)) {
+                        fieldId = readFieldValue(
+                            a,
+                            ['data-id', 'data-field-id', 'data-fieldid'],
+                            [
+                                /(?:^|[\s_-])id\s*([0-9]{1,2})(?=$|[\s_-])/i,
+                                /(?:^|[\s_-])field(?:id)?\s*([0-9]{1,2})(?=$|[\s_-])/i
+                            ]
+                        );
+                    }
+                    if (!(fieldId >= 1 && fieldId <= 18)) continue;
+
+                    // GID HARUS berasal dari field yang sama. Jangan pernah default ke gid=1.
+                    let gid = absoluteHref?.searchParams.get('gid') ?
+                        parseInt(absoluteHref.searchParams.get('gid'), 10) : -1;
+                    if (!(gid >= 1 && gid <= 4)) {
+                        gid = readFieldValue(
+                            a,
+                            ['data-gid', 'data-building-gid', 'data-buildingid', 'data-building-id'],
+                            [
+                                /(?:^|[\s_-])gid\s*([1-4])(?=$|[\s_-])/i,
+                                /(?:^|[\s_-])building(?:id|gid)?\s*([1-4])(?=$|[\s_-])/i
+                            ]
+                        );
+                    }
+                    if (!(gid >= 1 && gid <= 4)) continue;
+
+                    // Level juga dibaca dari wrapper field yang sama, bukan dari seluruh
+                    // #resourceFieldContainer. Dukung data-level, class levelN/lvlN,
+                    // title/aria-label, termasuk variasi class Travian seperti alevelN.
+                    const level = readFieldValue(
+                        a,
+                        ['data-level', 'data-lvl', 'data-field-level'],
+                        [
+                            /(?:^|[\s_-])(?:a)?level\s*([0-9]{1,2})(?=$|[\s_-])/i,
+                            /(?:^|[\s_-])lvl\s*([0-9]{1,2})(?=$|[\s_-])/i,
+                            /(?:^|[\s_-])level([0-9]{1,2})(?=$|[\s_-])/i,
+                            /(?:^|[\s_-])lvl([0-9]{1,2})(?=$|[\s_-])/i
+                        ]
+                    );
+                    if (!(level >= 0)) continue;
+
+                    const disabled = a.classList.contains('disabled') || !!a.closest('.disabled') ||
+                        a.getAttribute('aria-disabled') === 'true' ||
+                        a.getAttribute('data-disabled') === 'true';
+
+                    // Jika ada duplicate anchor untuk field yang sama, pilih record yang
+                    // paling lengkap; jangan biarkan duplicate mengubah hasil min level.
+                    if (seenResourceIds.has(fieldId)) continue;
+                    seenResourceIds.add(fieldId);
+
+                    if (absoluteHref) {
+                        absoluteHref.searchParams.set('gid', String(gid));
+                        absoluteHref.searchParams.set('newdid', expectedId);
+                    }
+
+                    resourceCandidates.push({
+                        fieldId,
+                        gid,
+                        level,
+                        href: absoluteHref?.href || hrefRaw,
+                        disabled
+                    });
+
+                    if (debugFields.length < 30) {
+                        const owner = (() => {
+                            let n = a;
+                            for (let depth = 0; depth < 8 && n; depth++, n = n.parentElement) {
+                                const cls = typeof n.className === 'string' ? n.className : '';
+                                if (cls.includes('buildingSlot') || cls.includes('resourceField') ||
+                                    n.hasAttribute?.('data-level') || n.hasAttribute?.('data-gid')) return n;
+                            }
+                            return a.parentElement || a;
+                        })();
+                        debugFields.push({
+                            fieldId,
+                            gid,
+                            level,
+                            tag: owner?.tagName || a.tagName || '',
+                            className: String(owner?.className || a.className || '').slice(0,140),
+                            href: absoluteHref?.href || hrefRaw,
+                            text: clean(owner?.textContent || a.textContent || '').slice(0,80)
+                        });
+                    }
+                }
+
+                // Hanya field dengan ID + GID + level yang lengkap yang boleh menjadi target.
+                // Urutan tie-break tetap fieldId agar hasil deterministik.
+                resourceCandidates.sort((a,b) => a.level - b.level || a.fieldId - b.fieldId);
+                const lowestResource = resourceCandidates.find(
+                    x => !x.disabled && x.level >= 0 && x.gid >= 1 && x.gid <= 4 && x.level < 10
+                ) || null;
+
+                // Semua 18 field harus benar-benar teridentifikasi sebagai pasangan
+                // {fieldId,gid,level}; jumlah node DOM saja tidak cukup.
+                const uniqueFields = resourceCandidates.length;
+                const resourceFieldsComplete = uniqueFields >= 18;
+                const uniqueLevels = resourceCandidates.map(x => x.level);
                 // RESOURCE BAR: Travian Legends memakai l1=wood, l2=clay,
                 // l3=iron, l4=crop. Sumber paling stabil adalah object window.resources
                 // yang dipakai UI Travian sendiri; fallback membaca #stockBar.
@@ -1548,7 +2068,7 @@ class MainActivity : Activity() {
                 // Level village dan snapshot resource dipisahkan: jangan membuang village
                 // hanya karena resource bar terlambat dirender. Nama + level tetap diterima
                 // jika 18 field sudah tersedia; resource akan disimpan bila lengkap.
-                if (!container || uniqueLevels.length < 18) {
+                if (!container || !resourceFieldsComplete) {
                     AndroidFarm.onVillageScanResult(JSON.stringify({
                         notReady:true, reason:'FIELDS_NOT_READY', id:currentId, expectedId,
                         url, activeId, activeName, fieldCount:uniqueLevels.length,
@@ -1566,8 +2086,8 @@ class MainActivity : Activity() {
                 );
 
                 AndroidFarm.onVillageScanResult(JSON.stringify({
-                    id:expectedId, name:pageName, minLevel:Math.min(...uniqueLevels),
-                    fields:uniqueLevels, fieldNodeCount:fieldNodes.length,
+                    id:expectedId, name:pageName, minLevel:(lowestResource?.level ?? Math.min(...uniqueLevels)),
+                    fields:uniqueLevels, fieldNodeCount:uniqueFields, resourceFieldCount:uniqueFields,
                     debugFieldCount:debugFields.length, debugFields,
                     resourceContainer:true, activeId, activeName, url, resources, lowestResource
                 }));
@@ -1631,31 +2151,32 @@ class MainActivity : Activity() {
         val lowestResource = json?.optJSONObject("lowestResource")
         val lowestResourceLevel = lowestResource?.optInt("level", -1) ?: -1
         val lowestResourceId = lowestResource?.optString("fieldId", "").orEmpty()
+        val lowestResourceGid = lowestResource?.optString("gid", "").orEmpty()
         val lowestResourceHref = lowestResource?.optString("href", "").orEmpty()
-        val scannedVillageLink = villageScanCollectedLinks[id].orEmpty()
+        // Jangan percaya link village yang dikumpulkan dari sidebar untuk record hasil
+        // scan. Sidebar Travian bisa memakai data-did lama/stale atau hanya merender
+        // sebagian village. Pada titik ini URL sudah diverifikasi dengan expectedId,
+        // jadi link DB harus dibentuk dari ID village yang benar-benar aktif.
+        val scannedVillageLink = "${normalizeServer(serverInput.text.toString())}/dorf1.php?newdid=$id"
         val existingRecord = loadVillageDataRecords().firstOrNull { it.id == id }
+
+        // Village dengan resource terendah L10+ TETAP disimpan di database.
+        // Resource Builder sendiri yang menentukan village mana yang dikerjakan
+        // berdasarkan checklist. Dengan begitu village L10+ tetap tersedia untuk
+        // Town Builder meskipun checklist Resource Builder tidak dicentang.
         upsertVillageDataRecord(
             id = id,
             namaVillage = name,
             linkVillage = scannedVillageLink,
             linkResource = lowestResourceHref.takeIf { it.isNotBlank() },
+            resourceId = lowestResourceId.takeIf { it.isNotBlank() },
+            resourceGid = lowestResourceGid.takeIf { it.isNotBlank() },
             minLvl = minLevel,
             isChecklist = existingRecord?.isChecklist
         )
+        if (minLevel >= 0) logEvent("Village $name Updated min L$minLevel")
 
         villageMinLevels[id] = minLevel
-        if (lowestResourceLevel >= 0 && lowestResourceId.isNotBlank()) {
-            val resourceType = when (lowestResourceId.toIntOrNull()) {
-                in 1..4 -> "Wood"
-                in 5..8 -> "Clay"
-                in 9..12 -> "Iron"
-                in 13..18 -> "Crop"
-                else -> "Resource"
-            }
-            villageMinResourceDetails[id] = resourceType to "id$lowestResourceId"
-        } else {
-            villageMinResourceDetails.remove(id)
-        }
 
         val progress = "${villageScanIndex + 1}/${villageScanTargets.size}"
 
@@ -1705,14 +2226,21 @@ class MainActivity : Activity() {
             updatedAt = timeFormat.format(Date())
         )
         saveResourceSnapshots()
-        if (lowestResource != null && lowestResourceHref.isNotBlank() && lowestResourceLevel >= 0) {
-            saveResourceBuilderTarget(id, name, lowestResourceLevel, lowestResourceId, lowestResourceHref)
+        if (minLevel < 10 && lowestResource != null && lowestResourceHref.isNotBlank() && lowestResourceId.isNotBlank() && lowestResourceGid.isNotBlank() && lowestResourceLevel >= 0) {
+            saveResourceBuilderTarget(id, name, lowestResourceLevel, lowestResourceId, lowestResourceGid, lowestResourceHref)
         } else {
             logEvent("UI: [$progress] target resource level terendah tidak ditemukan untuk $name")
         }
         if (wood.first < 0 || clay.first < 0 || iron.first < 0 || crop.first < 0) {
             logEvent("UI: [$progress] resource belum lengkap — wood=$wood; clay=$clay; iron=$iron; crop=$crop")
         }
+        logEvent(
+            "UI: [$progress] TARGET RES TERENDAH — " +
+                "id=${lowestResourceId.ifBlank { "-" }}; " +
+                "gid=${lowestResourceGid.ifBlank { "-" }}; " +
+                "level=${if (lowestResourceLevel >= 0) "L$lowestResourceLevel" else "-"}; " +
+                "href=${lowestResourceHref.ifBlank { "-" }}"
+        )
         if (capacityTab.visibility == View.VISIBLE) renderCapacityOverview()
 
         val existing = villageScanResults.indexOfFirst { it.first == id }
@@ -1754,10 +2282,7 @@ class MainActivity : Activity() {
         }.distinctBy { it.first }
         val processedCount = villageScanResults.distinctBy { it.first }.size
         farmStatus.text = "${merged.size} village ditemukan; detail berhasil ${processedCount}/${merged.size}."
-        logEvent(
-            "UI: scan selesai — ${processedCount}/${merged.size} detail berhasil; " +
-                "${merged.size} village tetap ditampilkan"
-        )
+        logEvent("REFRESH VILLAGE END")
 
         renderVillageChecklist(merged)
 
@@ -2118,15 +2643,24 @@ class MainActivity : Activity() {
     private fun saveCredentialsSecure() {
         debugTrace("ENTER saveCredentialsSecure")
         if (pendingUsername.isBlank() || pendingPassword.isBlank()) return
-        val encrypted = encryptPasswordSecure(pendingPassword)
-        if (encrypted.isBlank()) {
-            logEvent("Login berhasil tetapi password aman gagal disimpan")
+        val saved = runCatching {
+            CredentialDatabase(this).save(
+                normalizeServer(serverInput.text.toString()),
+                pendingUsername.trim(),
+                pendingPassword
+            )
+        }.getOrDefault(false)
+        if (!saved) {
+            logEvent("Login berhasil tetapi credential database gagal disimpan")
             return
         }
+        // Server/user tetap boleh dipakai sebagai konfigurasi non-secret; password hanya di DB.
         getSharedPreferences("config", MODE_PRIVATE).edit()
-            .putString("username", pendingUsername)
-            .putString("password_secure", encrypted)
+            .remove("server")
+            .remove("username")
+            .remove("password_secure")
             .apply()
+        logEvent("Credential login tersimpan di database terenkripsi")
     }
 
     private fun encryptPasswordSecure(value: String): String {
@@ -2181,46 +2715,29 @@ class MainActivity : Activity() {
     private fun normalizeServer(value: String): String {
         debugTrace("ENTER normalizeServer")
         var s = value.trim()
-        if (s.isBlank()) s = "https://ts20.x2.europe.travian.com"
-        if (!s.startsWith("http")) s = "https://$s"
+        if (s.isBlank() && ::serverInput.isInitialized) s = serverInput.text.toString().trim()
+        if (s.isBlank()) s = CredentialDatabase(this).read()?.server.orEmpty().trim()
+        if (!s.startsWith("http", true)) s = "https://$s"
         return s.trimEnd('/')
     }
 
-    /** Verbose diagnostics: every function entry is sent to Logcat and, except high-frequency UI helpers, to the app log. */
+    /** Debug tracing dinonaktifkan untuk build produksi. */
     private fun debugTrace(message: String) {
-        android.util.Log.d("TravianFarmAssistant", "[DEBUG] $message")
-        val quiet = message.removePrefix("ENTER ").substringBefore("(")
-        // Helper UI/log ini dapat dipanggil dari logEvent(). Jangan persist debugTrace
-        // mereka, karena refreshLogOverview() -> debugTrace() -> logEvent() akan
-        // membuat rekursi tak berujung dan menyebabkan ANR saat tab Log dibuka.
-        if (quiet !in setOf(
-                "updateCountdown",
-                "run",
-                "refreshRecentLogs",
-                "pruneLogs",
-                "refreshLogOverview",
-                "buildColoredLog"
-            )) {
-            logEvent("[DEBUG] $message")
-        }
+        // Intentionally empty.
     }
 
     private fun logEvent(message: String) {
-        val line = "${logTimeFormat.format(Date())} | $message"
+        val clean = when {
+            message == "BOT ON" -> "BOT ON"
+            message == "BOT OFF" -> "BOT OFF"
+            message == "REFRESH VILLAGE START" -> "REFRESH VILLAGE START"
+            message == "REFRESH VILLAGE END" -> "REFRESH VILLAGE END"
+            message.startsWith("Village ") && message.contains(" Updated min L") -> message
+            else -> return
+        }
+        val line = "${logTimeFormat.format(Date())} | $clean"
         try {
             openFileOutput(logFileName, MODE_APPEND).bufferedWriter().use { it.appendLine(line) }
-
-            // Jangan prune/read seluruh file pada setiap log. Dengan verbose debug hal ini
-            // membuat UI macet dan tab LOG dapat ANR. Cleanup cukup berkala.
-            val now = System.currentTimeMillis()
-            if (now - lastLogPruneAt >= 60 * 60 * 1000L) {
-                lastLogPruneAt = now
-                handler.post { pruneLogs() }
-            }
-
-            // Jangan membaca file log synchronously untuk setiap baris debug.
-            // Dengan verbose logging, ini sebelumnya membuat main thread sibuk terus
-            // dan tab dapat terlihat seperti crash/ANR.
             scheduleRecentLogRefresh()
         } catch (_: Exception) {
             // Logging must never interrupt the automation.
@@ -2312,6 +2829,25 @@ class MainActivity : Activity() {
                             reloginRequested = false
                         }
                     }
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun onHoldCelebrationClick(villageName: String) {
+            debugTrace("ENTER onHoldCelebrationClick")
+            runOnUiThread { logEvent("Nama Village $villageName Hold Celebration Success") }
+        }
+
+        @JavascriptInterface
+        fun onTravianLogoutClick() {
+            debugTrace("ENTER onTravianLogoutClick")
+            runOnUiThread {
+                if (logoutCleanupInProgress) {
+                    logEvent("LOGOUT DOM diklik — menunggu cleanup utama")
+                } else {
+                    clearVillageDatabaseOnLogout("Travian logout DOM")
+                    logEvent("LOGOUT DOM diklik — database village dihapus")
                 }
             }
         }
@@ -2588,20 +3124,15 @@ class MainActivity : Activity() {
         // Visibility diubah dulu, lalu konten dirender setelah UI punya kesempatan
         // menggambar frame berikutnya. Pembacaan file Log sendiri dilakukan async.
         fun showTab(tab: View) {
-            android.util.Log.d("TravianFarmAssistant", "TAB -> ${when (tab) {
-                farmTab -> "FARM"
-                capacityTab -> "CAPACITY"
-                logTab -> "LOG"
-                else -> "UNKNOWN"
-            }}")
-
             farmTab.visibility = if (tab === farmTab) View.VISIBLE else View.GONE
             capacityTab.visibility = if (tab === capacityTab) View.VISIBLE else View.GONE
+            dbTab.visibility = if (tab === dbTab) View.VISIBLE else View.GONE
             logTab.visibility = if (tab === logTab) View.VISIBLE else View.GONE
 
             handler.post {
                 when {
                     tab === capacityTab -> renderCapacityOverview()
+                    tab === dbTab -> updateVillageDatabaseView()
                     tab === logTab -> refreshLogOverview()
                 }
             }
@@ -2609,6 +3140,7 @@ class MainActivity : Activity() {
         addLogControlsIfNeeded()
         farmTabButton.setOnClickListener { showTab(farmTab) }
         capacityTabButton.setOnClickListener { showTab(capacityTab) }
+        dbTabButton.setOnClickListener { showTab(dbTab) }
         logTabButton.setOnClickListener { showTab(logTab) }
         showTab(farmTab)
     }
@@ -2843,10 +3375,16 @@ class MainActivity : Activity() {
         val now = System.currentTimeMillis()
         val farmStart = prefs.getLong("farm_cycle_started_at", 0L)
         val resourceStart = prefs.getLong("resource_cycle_started_at", 0L)
+        val townStart = prefs.getLong("town_cycle_started_at", 0L)
+        val holdStart = prefs.getLong("hold_celebration_cycle_started_at", 0L)
         val farmDuration = if (farmStart > 0L) now - farmStart else prefs.getLong("farm_cycle_duration_ms", 0L)
         val resourceDuration = if (resourceStart > 0L) now - resourceStart else prefs.getLong("resource_cycle_duration_ms", 0L)
+        val townDuration = if (townStart > 0L) now - townStart else prefs.getLong("town_cycle_duration_ms", 0L)
+        val holdDuration = if (holdStart > 0L) now - holdStart else prefs.getLong("hold_celebration_cycle_duration_ms", 0L)
         farmCycleTime.text = "Waktu Siklus Farm List: ${formatDuration(farmDuration)}"
         resourceCycleTime.text = "Waktu Siklus Resource Builder: ${formatDuration(resourceDuration)}"
+        townCycleTime.text = "Waktu Siklus Town Builder: ${formatDuration(townDuration)}"
+        holdCelebrationCycleTime.text = "Waktu Siklus Hold Celebration: ${formatDuration(holdDuration)}"
     }
 
     private fun updateCountdown() {

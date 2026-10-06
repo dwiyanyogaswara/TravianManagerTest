@@ -11,41 +11,52 @@
         android:orientation="horizontal">
         <Button
             android:id="@+id/farmTabButton"
-            android:text="Farm Res Builder"
+            android:text="🌾 Farm Res Builder"
+            android:backgroundTint="#2E7D32"
+            android:textColor="#FFFFFF"
             android:textSize="12sp"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"/>
         <Button
             android:id="@+id/capacityTabButton"
-            android:text="Capacity Overview"
+            android:text="📊 Capacity"
+            android:backgroundTint="#1565C0"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"/>
+        <Button
+            android:id="@+id/dbTabButton"
+            android:text="🗄 Database"
+            android:backgroundTint="#455A64"
+            android:textColor="#FFFFFF"
             android:textSize="12sp"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"/>
         <Button
             android:id="@+id/logTabButton"
-            android:text="Log"
+            android:text="📋 Log"
+            android:backgroundTint="#6A1B9A"
+            android:textColor="#FFFFFF"
             android:textSize="12sp"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"/>
     </LinearLayout>
 
-    <FrameLayout
+    <ScrollView
         android:id="@+id/farmTab"
+        android:fillViewport="true"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1">
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
+            android:layout_height="wrap_content"
             android:orientation="vertical">
-            <ScrollView
-                android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="0.48"
-                android:fillViewport="true">
                 <LinearLayout
                     android:orientation="vertical"
                     android:padding="12dp"
@@ -76,7 +87,20 @@
                         android:layout_height="wrap_content"/>
                     <Button
                         android:id="@+id/loginTravian"
-                        android:text="LOGIN"
+                        android:text="🔐 LOGIN"
+                        android:backgroundTint="#2E7D32"
+                        android:textColor="#FFFFFF"
+                        android:textStyle="bold"
+                        android:layout_marginTop="6dp"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"/>
+                    <Button
+                        android:id="@+id/logoutTravian"
+                        android:text="🗑 LOGOUT + HAPUS DATABASE"
+                        android:backgroundTint="#C62828"
+                        android:textColor="#FFFFFF"
+                        android:textStyle="bold"
+                        android:layout_marginTop="6dp"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"/>
                     <TextView
@@ -134,29 +158,27 @@
                         android:layout_height="wrap_content"/>
                     <CheckBox
                         android:id="@+id/resourceBuilder"
-                        android:text="RESOURCE BUILDER — field terendah sampai level 10"
+                        android:text="RESOURCE BUILDER — field terendah sampai level 20"
                         android:checked="true"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"/>
+                    <CheckBox
+                        android:id="@+id/townBuilder"
+                        android:text="TOWN BUILDER"
+                        android:checked="false"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"/>
                     <Button
                         android:id="@+id/refreshVillages"
-                        android:text="↻  REFRESH VILLAGE"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"/>
-                    <TextView
-                        android:id="@+id/villageDatabaseView"
-                        android:text="DATABASE VILLAGE: kosong"
-                        android:textSize="10sp"
-                        android:typeface="monospace"
-                        android:textIsSelectable="true"
-                        android:padding="6dp"
-                        android:layout_marginTop="6dp"
-                        android:background="#202020"
+                        android:text="🔄 REFRESH VILLAGE"
+                        android:backgroundTint="#1565C0"
                         android:textColor="#FFFFFF"
+                        android:textStyle="bold"
+                        android:layout_marginTop="8dp"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"/>
                     <TextView
-                        android:text="Pilih village untuk Resource Builder"
+                        android:text="Pilih village untuk Resource Builder / Hold Celebration"
                         android:textStyle="bold"
                         android:layout_marginTop="4dp"
                         android:layout_width="match_parent"
@@ -191,6 +213,16 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"/>
                     <TextView
+                        android:id="@+id/townCycleTime"
+                        android:text="Waktu Siklus Town Builder: 00:00:00"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"/>
+                    <TextView
+                        android:id="@+id/holdCelebrationCycleTime"
+                        android:text="Waktu Siklus Hold Celebration: 00:00:00"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"/>
+                    <TextView
                         android:id="@+id/nextRun"
                         android:text="Next run: -- | Countdown: --:--:--"
                         android:textStyle="bold"
@@ -200,6 +232,7 @@
                     <Switch
                         android:id="@+id/botToggle"
                         android:text="BOT MATI"
+                        android:backgroundTint="#D32F2F"
                         android:textOn="BOT AKTIF"
                         android:textOff="BOT MATI"
                         android:textSize="19sp"
@@ -214,7 +247,6 @@
                         android:layout_width="match_parent"
                         android:layout_height="68dp"/>
                 </LinearLayout>
-            </ScrollView>
             <LinearLayout
                 android:id="@+id/recentLogsBox"
                 android:orientation="vertical"
@@ -245,29 +277,21 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"/>
             </LinearLayout>
-            <TextView
-                android:id="@+id/liveWebViewLabel"
-                android:text="LIVE — HALAMAN YANG DIJALANKAN BOT"
-                android:textStyle="bold"
-                android:textSize="12sp"
-                android:paddingStart="12dp"
-                android:paddingTop="4dp"
-                android:paddingBottom="4dp"
-                android:background="#1E1E1E"
-                android:textColor="#90CAF9"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"/>
+            <!--
+                No Live Bot UI.
+                The WebView below is retained only as an invisible compatibility
+                surface for legacy login/DOM helper code. All actual automation
+                runs on FarmAutomationService's private WebView.
+            -->
             <WebView
                 android:id="@+id/webView"
-                android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="0.52"
-                android:background="#121212"
-                android:overScrollMode="always"
-                android:nestedScrollingEnabled="false"
-                android:scrollbars="vertical"/>
+                android:layout_width="1dp"
+                android:layout_height="1dp"
+                android:visibility="gone"
+                android:importantForAccessibility="no"
+                android:alpha="0"/>
         </LinearLayout>
-    </FrameLayout>
+    </ScrollView>
 
     <ScrollView
         android:id="@+id/capacityTab"
@@ -297,6 +321,39 @@
             <LinearLayout
                 android:id="@+id/capacityOverview"
                 android:orientation="vertical"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"/>
+        </LinearLayout>
+    </ScrollView>
+
+    <ScrollView
+        android:id="@+id/dbTab"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true"
+        android:visibility="gone">
+        <LinearLayout
+            android:orientation="vertical"
+            android:padding="8dp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+            <TextView
+                android:text="DATABASE VILLAGE"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"/>
+            <TextView
+                android:id="@+id/villageDatabaseView"
+                android:text="DATABASE VILLAGE: kosong"
+                android:textSize="10sp"
+                android:typeface="monospace"
+                android:textIsSelectable="true"
+                android:padding="6dp"
+                android:layout_marginTop="6dp"
+                android:background="#202020"
+                android:textColor="#FFFFFF"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"/>
         </LinearLayout>
