@@ -1037,8 +1037,8 @@ class FarmAutomationService : Service() {
                 return@acceptCookiesIfPresent
             }
 
-            // Setelah klik "Upgrade 25% faster", tunggu proses skip video selesai.
-            // Jangan biarkan callback halaman mengganggu proses video-feature upgrade.
+            // Setelah klik "Upgrade 25% faster", jangan lanjut hanya karena URL berubah.
+            // Proses video-feature upgrade diberi waktu penuh 40 detik.
             if (builderStage == "WAIT_VIDEO_SKIP") {
                 return@acceptCookiesIfPresent
             }
@@ -3039,36 +3039,6 @@ private fun clickTransferSelected() {
                 if (!btn) return 'not-found';
                 btn.scrollIntoView({block:'center', inline:'center'});
                 btn.click();
-
-                let attempts = 0;
-                const skipVideo = () => {
-                    attempts++;
-                    const video = [...document.querySelectorAll('video')]
-                        .find(v => visible(v) && v.src && /Arkheim_EN\.mp4/i.test(v.src));
-                    if (!video) {
-                        if (attempts < 50) setTimeout(skipVideo, 100);
-                        return;
-                    }
-
-                    const finish = () => {
-                        try {
-                            if (Number.isFinite(video.duration) && video.duration > 0) {
-                                video.currentTime = Math.max(0, video.duration - 0.05);
-                                video.dispatchEvent(new Event('timeupdate', {bubbles:true}));
-                                video.dispatchEvent(new Event('ended', {bubbles:true}));
-                            }
-                            video.pause();
-                        } catch (e) {}
-                    };
-
-                    if (Number.isFinite(video.duration) && video.duration > 0) {
-                        finish();
-                    } else {
-                        video.addEventListener('loadedmetadata', finish, {once:true});
-                        setTimeout(finish, 1000);
-                    }
-                };
-                setTimeout(skipVideo, 100);
                 return 'clicked-video-upgrade';
             })();
         """.trimIndent()
@@ -3076,17 +3046,85 @@ private fun clickTransferSelected() {
             val result = raw.orEmpty().trim('"')
             val name = builderVillages.getOrNull(builderVillageIndex)?.second ?: "Village ${builderVillageIndex + 1}"
             if (result == "clicked-video-upgrade") {
-                logEvent("Town Builder: $name klik Upgrade 25% faster — video langsung ke akhir")
-                handler.postDelayed({
-                    if (!running || !townBuilderInProgress) return@postDelayed
-                    logEvent("Town Builder: $name video selesai — lanjut village berikutnya")
-                    upgradeClickSourceUrl = ""
-                    pendingUpgradeUrl = ""
-                    pendingUpgradeCosts = longArrayOf(0L, 0L, 0L, 0L)
-                    heroTransferCompleted = false
-                    builderStage = "TOWN_ADVANCING"
-                    advanceTownBuilderVillage()
-                }, 1_500L)
+                logEvent("Town Builder: $name klik Upgrade 25% faster — video muncul, tunggu 4 detik")
+                val videoView = automationWebView() ?: return@evaluateJavascript
+                val seekJs = """
+                    (() => {
+                        const findVideo = () => {
+                            const videos = [...document.querySelectorAll('video')];
+                            return videos.find(v => {
+                                const r = v.getBoundingClientRect();
+                                return r.width > 0 && r.height > 0;
+                            }) || videos[0] || null;
+                        };
+                        const video = findVideo();
+                        const seekAfterDelay = (target) => {
+                            setTimeout(() => {
+                                try {
+                                    target.currentTime = 29;
+                                    target.play().catch(() => {});
+                                    document.documentElement.dataset.travianVideoSkipResult = 'video-seeked-29';
+                                } catch (e) {
+                                    document.documentElement.dataset.travianVideoSkipResult = 'video-seek-error';
+                                }
+                            }, 4000);
+                        };
+                        if (video) {
+                            seekAfterDelay(video);
+                            return 'video-found-waiting-4s';
+                        }
+                        const startedAt = Date.now();
+                        const timer = setInterval(() => {
+                            const found = findVideo();
+                            if (found) {
+                                clearInterval(timer);
+                                seekAfterDelay(found);
+                            } else if (Date.now() - startedAt >= 15000) {
+                                clearInterval(timer);
+                                document.documentElement.dataset.travianVideoSkipResult = 'video-not-found';
+                            }
+                        }, 100);
+                        return 'waiting-video';
+                    })();
+                """.trimIndent()
+                logEvent("Town Builder: $name klik Upgrade 25% faster — menunggu video muncul")
+                videoView.evaluateJavascript(seekJs) { rawResult ->
+                    logEvent("Town Builder: $name video terdeteksi — tunggu 4 detik lalu lompat ke detik 29")
+                    val checkSeeked: Runnable = object : Runnable {
+                        override fun run() {
+                            if (!running || !townBuilderInProgress) return
+                            videoView.evaluateJavascript("document.documentElement.dataset.travianVideoSkipResult || ''") { stateRaw ->
+                                val state = stateRaw.orEmpty().trim('"')
+                                when (state) {
+                                    "video-seeked-29" -> {
+                                        logEvent("Town Builder: $name video sudah di-seek ke detik 29 — tunggu 5 detik")
+                                        handler.postDelayed({
+                                            if (!running || !townBuilderInProgress) return@postDelayed
+                                            logEvent("Town Builder: $name selesai tunggu setelah seek video — lanjut village berikutnya")
+                                            upgradeClickSourceUrl = ""
+                                            pendingUpgradeUrl = ""
+                                            pendingUpgradeCosts = longArrayOf(0L, 0L, 0L, 0L)
+                                            heroTransferCompleted = false
+                                            builderStage = "TOWN_ADVANCING"
+                                            advanceTownBuilderVillage()
+                                        }, 5_000L)
+                                    }
+                                    "video-not-found", "video-seek-error" -> {
+                                        logEvent("Town Builder: $name gagal seek video ($state) — lanjut village berikutnya")
+                                        upgradeClickSourceUrl = ""
+                                        pendingUpgradeUrl = ""
+                                        pendingUpgradeCosts = longArrayOf(0L, 0L, 0L, 0L)
+                                        heroTransferCompleted = false
+                                        builderStage = "TOWN_ADVANCING"
+                                        advanceTownBuilderVillage()
+                                    }
+                                    else -> handler.postDelayed(this, 500L)
+                                }
+                            }
+                        }
+                    }
+                    handler.postDelayed(checkSeeked, 500L)
+                }
             } else {
                 builderStage = "INSPECT_UPGRADE"
                 upgradeClickSourceUrl = ""
@@ -3267,36 +3305,6 @@ private fun clickTransferSelected() {
                 if (!btn) return 'not-found';
                 btn.scrollIntoView({block:'center', inline:'center'});
                 btn.click();
-
-                let attempts = 0;
-                const skipVideo = () => {
-                    attempts++;
-                    const video = [...document.querySelectorAll('video')]
-                        .find(v => visible(v) && v.src && /Arkheim_EN\.mp4/i.test(v.src));
-                    if (!video) {
-                        if (attempts < 50) setTimeout(skipVideo, 100);
-                        return;
-                    }
-
-                    const finish = () => {
-                        try {
-                            if (Number.isFinite(video.duration) && video.duration > 0) {
-                                video.currentTime = Math.max(0, video.duration - 0.05);
-                                video.dispatchEvent(new Event('timeupdate', {bubbles:true}));
-                                video.dispatchEvent(new Event('ended', {bubbles:true}));
-                            }
-                            video.pause();
-                        } catch (e) {}
-                    };
-
-                    if (Number.isFinite(video.duration) && video.duration > 0) {
-                        finish();
-                    } else {
-                        video.addEventListener('loadedmetadata', finish, {once:true});
-                        setTimeout(finish, 1000);
-                    }
-                };
-                setTimeout(skipVideo, 100);
                 return 'clicked-video-upgrade';
             })();
         """.trimIndent()
@@ -3304,17 +3312,85 @@ private fun clickTransferSelected() {
             val result = raw.orEmpty().trim('"')
             val name = builderVillages.getOrNull(builderVillageIndex)?.second ?: "Village ${builderVillageIndex + 1}"
             if (result == "clicked-video-upgrade") {
-                logEvent("Resource Builder: $name klik Upgrade 25% faster — video langsung ke akhir")
-                handler.postDelayed({
-                    if (!running || !builderInProgress || townBuilderInProgress) return@postDelayed
-                    logEvent("Resource Builder: $name video selesai — lanjut village berikutnya")
-                    upgradeClickSourceUrl = ""
-                    pendingUpgradeUrl = ""
-                    pendingUpgradeCosts = longArrayOf(0L, 0L, 0L, 0L)
-                    heroTransferCompleted = false
-                    builderStage = "ADVANCING"
-                    goToNextBuilderVillage()
-                }, 1_500L)
+                logEvent("Resource Builder: $name klik Upgrade 25% faster — video muncul, tunggu 4 detik")
+                val videoView = automationWebView() ?: return@evaluateJavascript
+                val seekJs = """
+                    (() => {
+                        const findVideo = () => {
+                            const videos = [...document.querySelectorAll('video')];
+                            return videos.find(v => {
+                                const r = v.getBoundingClientRect();
+                                return r.width > 0 && r.height > 0;
+                            }) || videos[0] || null;
+                        };
+                        const video = findVideo();
+                        const seekAfterDelay = (target) => {
+                            setTimeout(() => {
+                                try {
+                                    target.currentTime = 29;
+                                    target.play().catch(() => {});
+                                    document.documentElement.dataset.travianVideoSkipResult = 'video-seeked-29';
+                                } catch (e) {
+                                    document.documentElement.dataset.travianVideoSkipResult = 'video-seek-error';
+                                }
+                            }, 4000);
+                        };
+                        if (video) {
+                            seekAfterDelay(video);
+                            return 'video-found-waiting-4s';
+                        }
+                        const startedAt = Date.now();
+                        const timer = setInterval(() => {
+                            const found = findVideo();
+                            if (found) {
+                                clearInterval(timer);
+                                seekAfterDelay(found);
+                            } else if (Date.now() - startedAt >= 15000) {
+                                clearInterval(timer);
+                                document.documentElement.dataset.travianVideoSkipResult = 'video-not-found';
+                            }
+                        }, 100);
+                        return 'waiting-video';
+                    })();
+                """.trimIndent()
+                logEvent("Resource Builder: $name klik Upgrade 25% faster — menunggu video muncul")
+                videoView.evaluateJavascript(seekJs) { rawResult ->
+                    logEvent("Resource Builder: $name video terdeteksi — tunggu 4 detik lalu lompat ke detik 29")
+                    val checkSeeked: Runnable = object : Runnable {
+                        override fun run() {
+                            if (!running || !builderInProgress || townBuilderInProgress) return
+                            videoView.evaluateJavascript("document.documentElement.dataset.travianVideoSkipResult || ''") { stateRaw ->
+                                val state = stateRaw.orEmpty().trim('"')
+                                when (state) {
+                                    "video-seeked-29" -> {
+                                        logEvent("Resource Builder: $name video sudah di-seek ke detik 29 — tunggu 5 detik")
+                                        handler.postDelayed({
+                                            if (!running || !builderInProgress || townBuilderInProgress) return@postDelayed
+                                            logEvent("Resource Builder: $name selesai tunggu setelah seek video — lanjut village berikutnya")
+                                            upgradeClickSourceUrl = ""
+                                            pendingUpgradeUrl = ""
+                                            pendingUpgradeCosts = longArrayOf(0L, 0L, 0L, 0L)
+                                            heroTransferCompleted = false
+                                            builderStage = "ADVANCING"
+                                            goToNextBuilderVillage()
+                                        }, 5_000L)
+                                    }
+                                    "video-not-found", "video-seek-error" -> {
+                                        logEvent("Resource Builder: $name gagal seek video ($state) — lanjut village berikutnya")
+                                        upgradeClickSourceUrl = ""
+                                        pendingUpgradeUrl = ""
+                                        pendingUpgradeCosts = longArrayOf(0L, 0L, 0L, 0L)
+                                        heroTransferCompleted = false
+                                        builderStage = "ADVANCING"
+                                        goToNextBuilderVillage()
+                                    }
+                                    else -> handler.postDelayed(this, 500L)
+                                }
+                            }
+                        }
+                    }
+                    handler.postDelayed(checkSeeked, 500L)
+                }
             } else {
                 builderStage = "INSPECT_UPGRADE"
                 upgradeClickSourceUrl = ""
