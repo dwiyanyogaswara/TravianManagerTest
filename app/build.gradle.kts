@@ -8,7 +8,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.travianfarmassistant"
+        applicationId = "com.example.travianfarmassistant25"
         minSdk = 26
         targetSdk = 35
         versionCode = 45
