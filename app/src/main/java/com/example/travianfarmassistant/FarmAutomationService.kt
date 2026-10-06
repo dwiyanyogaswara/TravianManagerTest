@@ -3371,7 +3371,6 @@ private fun clickTransferSelected() {
                                             pendingUpgradeUrl = ""
                                             pendingUpgradeCosts = longArrayOf(0L, 0L, 0L, 0L)
                                             heroTransferCompleted = false
-                                            builderStage = "ADVANCING"
                                             goToNextBuilderVillage()
                                         }, 5_000L)
                                     }
